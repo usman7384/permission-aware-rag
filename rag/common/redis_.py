@@ -23,9 +23,9 @@ async def ping(client: Redis) -> None:
     await client.ping()
 
 
-async def ensure_jobs_group(client: Redis) -> None:
+async def ensure_group(client: Redis, stream: str, group: str) -> None:
     try:
-        await client.xgroup_create(JOBS_STREAM, JOBS_GROUP, id="0", mkstream=True)
+        await client.xgroup_create(stream, group, id="0", mkstream=True)
     except ResponseError as exc:
         if "BUSYGROUP" not in str(exc):
             raise
@@ -37,19 +37,19 @@ async def enqueue_job(client: Redis, op: str, path: str) -> str:
     return job_id
 
 
-async def read_jobs(client: Redis, consumer: str, block_ms: int) -> list[Message]:
-    """New jobs for this consumer; waits up to `block_ms` for one to arrive."""
-    reply = await client.xreadgroup(
-        JOBS_GROUP, consumer, {JOBS_STREAM: ">"}, count=1, block=block_ms
-    )
+async def read_new(
+    client: Redis, stream: str, group: str, consumer: str, block_ms: int
+) -> list[Message]:
+    """New messages for this consumer; waits up to `block_ms` for one to arrive."""
+    reply = await client.xreadgroup(group, consumer, {stream: ">"}, count=1, block=block_ms)
     return [message for _, messages in reply for message in messages]
 
 
-async def claim_idle_jobs(client: Redis, consumer: str, min_idle_ms: int) -> list[Message]:
-    """Take over pending jobs that no consumer has touched for `min_idle_ms`."""
-    _, messages, _ = await client.xautoclaim(
-        JOBS_STREAM, JOBS_GROUP, consumer, min_idle_time=min_idle_ms
-    )
+async def claim_idle(
+    client: Redis, stream: str, group: str, consumer: str, min_idle_ms: int
+) -> list[Message]:
+    """Take over pending messages that no consumer has touched for `min_idle_ms`."""
+    _, messages, _ = await client.xautoclaim(stream, group, consumer, min_idle_time=min_idle_ms)
     return [(message_id, fields) for message_id, fields in messages if fields]
 
 
@@ -60,8 +60,8 @@ async def deliveries(client: Redis, message_id: str) -> int:
     return pending[0]["times_delivered"] if pending else 0
 
 
-async def ack_job(client: Redis, message_id: str) -> None:
-    await client.xack(JOBS_STREAM, JOBS_GROUP, message_id)
+async def ack(client: Redis, stream: str, group: str, message_id: str) -> None:
+    await client.xack(stream, group, message_id)
 
 
 async def dead_letter(
@@ -76,3 +76,10 @@ async def dead_letter(
 
 async def emit_change(client: Redis, event_type: str, doc_ids: list[str]) -> None:
     await client.xadd(CHANGES_STREAM, {"type": event_type, "doc_ids": json.dumps(doc_ids)})
+
+
+async def emit_tuple_change(client: Redis, subject: str, relation: str, obj: str) -> None:
+    await client.xadd(
+        CHANGES_STREAM,
+        {"type": "tuple_changed", "subject": subject, "relation": relation, "object": obj},
+    )

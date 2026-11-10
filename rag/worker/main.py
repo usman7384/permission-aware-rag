@@ -1,5 +1,6 @@
 import asyncio
 import socket
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal
 
@@ -8,8 +9,10 @@ from pydantic import BaseModel
 from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.ids import doc_id
+from rag.common.keys import CHANGES_GROUP, CHANGES_STREAM, JOBS_GROUP, JOBS_STREAM
 from rag.common.log import log
 from rag.common.models import make_embedder
+from rag.worker import invalidate
 from rag.worker.chunk import chunk
 from rag.worker.index import Deps, cleanup, commit, emit, hash_file, index_new, stamp
 from rag.worker.parse import parse
@@ -76,12 +79,14 @@ async def handle(deps: Deps, message: redis_.Message) -> None:
             await redis_.dead_letter(deps.redis, message_id, fields, repr(exc), delivered)
             log("job_dead_lettered", job_id=fields.get("job_id"), deliveries=delivered)
         return
-    await redis_.ack_job(deps.redis, message_id)
+    await redis_.ack(deps.redis, JOBS_STREAM, JOBS_GROUP, message_id)
 
 
 async def consume_once(deps: Deps, consumer: str) -> int:
     """Handle the new jobs that arrive within one blocking read; returns how many."""
-    messages = await redis_.read_jobs(deps.redis, consumer, deps.settings.worker_block_ms)
+    messages = await redis_.read_new(
+        deps.redis, JOBS_STREAM, JOBS_GROUP, consumer, deps.settings.worker_block_ms
+    )
     for message in messages:
         await handle(deps, message)
     return len(messages)
@@ -89,21 +94,26 @@ async def consume_once(deps: Deps, consumer: str) -> int:
 
 async def reclaim_once(deps: Deps, consumer: str) -> int:
     """Retry jobs left unacknowledged for `RECLAIM_IDLE_MS`; returns how many."""
-    messages = await redis_.claim_idle_jobs(deps.redis, consumer, deps.settings.reclaim_idle_ms)
+    messages = await redis_.claim_idle(
+        deps.redis, JOBS_STREAM, JOBS_GROUP, consumer, deps.settings.reclaim_idle_ms
+    )
     for message in messages:
         await handle(deps, message)
     return len(messages)
 
 
-async def consume_loop(deps: Deps, consumer: str) -> None:
+Step = Callable[[Deps, str], Awaitable[int]]
+
+
+async def consume_loop(deps: Deps, consumer: str, consume: Step) -> None:
     while True:
-        await consume_once(deps, consumer)
+        await consume(deps, consumer)
 
 
-async def reclaim_loop(deps: Deps, consumer: str) -> None:
+async def reclaim_loop(deps: Deps, consumer: str, reclaim: Step) -> None:
     while True:
         await asyncio.sleep(deps.settings.reclaim_idle_ms / 1000)
-        await reclaim_once(deps, consumer)
+        await reclaim(deps, consumer)
 
 
 async def open_deps(settings: Settings) -> Deps:
@@ -125,16 +135,19 @@ async def close_deps(deps: Deps) -> None:
 
 
 async def run(settings: Settings) -> None:
-    """Reconcile the corpus, then watch it and process jobs until interrupted."""
+    """Reconcile the corpus, then watch it, process jobs and change events until interrupted."""
     deps = await open_deps(settings)
     consumer = socket.gethostname()
     try:
-        await redis_.ensure_jobs_group(deps.redis)
+        await redis_.ensure_group(deps.redis, JOBS_STREAM, JOBS_GROUP)
+        await redis_.ensure_group(deps.redis, CHANGES_STREAM, CHANGES_GROUP)
         await reconcile(settings, deps.pg, deps.redis)
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(watch(settings, deps.redis))
-            tasks.create_task(consume_loop(deps, consumer))
-            tasks.create_task(reclaim_loop(deps, consumer))
+            tasks.create_task(consume_loop(deps, consumer, consume_once))
+            tasks.create_task(reclaim_loop(deps, consumer, reclaim_once))
+            tasks.create_task(consume_loop(deps, consumer, invalidate.consume_once))
+            tasks.create_task(reclaim_loop(deps, consumer, invalidate.reclaim_once))
     finally:
         await close_deps(deps)
 

@@ -41,6 +41,13 @@ async def insert_tuple(conn: AsyncConnection, subject: str, relation: str, obj: 
     )
 
 
+async def delete_tuple(conn: AsyncConnection, subject: str, relation: str, obj: str) -> None:
+    await conn.execute(
+        "DELETE FROM tuples WHERE subject = %s AND relation = %s AND object = %s",
+        (subject, relation, obj),
+    )
+
+
 async def upsert_api_key(
     conn: AsyncConnection, key_hash: str, user_id: str, is_admin: bool
 ) -> None:
@@ -127,6 +134,22 @@ async def select_document_readers(conn: AsyncConnection, obj: str) -> list[str]:
         {"doc": obj},
     )
     return [subject for (subject,) in await cur.fetchall()]
+
+
+async def select_live_documents_beneath(conn: AsyncConnection, obj: str) -> list[UUID]:
+    """Live documents that are `obj` or lie beneath it through `parent` tuples."""
+    cur = await conn.execute(
+        "WITH RECURSIVE below(obj) AS ("
+        "  SELECT %(obj)s::text"
+        "  UNION"
+        "  SELECT t.subject FROM tuples t JOIN below ON t.object = below.obj"
+        "  WHERE t.relation = 'parent'"
+        ") "
+        "SELECT d.doc_id FROM documents d JOIN below ON below.obj = 'doc:' || d.doc_id "
+        "WHERE d.deleted_at IS NULL ORDER BY d.doc_id",
+        {"obj": obj},
+    )
+    return [doc for (doc,) in await cur.fetchall()]
 
 
 async def select_principals(conn: AsyncConnection, user: str) -> list[str]:

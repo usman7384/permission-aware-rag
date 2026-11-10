@@ -12,7 +12,7 @@ make up        # start Postgres, Redis, Qdrant, OpenSearch
 make migrate   # Postgres schema, Qdrant collections, OpenSearch index
 make seed      # fixture users, groups, tuples and API keys
 make api       # http://localhost:8000/healthz
-make worker    # index CORPUS_DIR and watch it for changes
+make worker    # index CORPUS_DIR, watch it, and re-stamp permissions on tuple changes
 uv run python -m rag.api.client "How many paid leave days do we get?" --key dev-ben
 make test      # unit tests
 make test-int  # integration tests (needs make up)

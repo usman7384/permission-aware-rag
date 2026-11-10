@@ -96,8 +96,8 @@ Owner action: add `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` and `LLM_SMALL_MODE
 
 Spec: sections 7.2, 9.3, 10 (`/admin/tuples`).
 
-- [ ] `POST /admin/tuples`.
-- [ ] Invalidator consumer with the `tuple_changed` actions (re-stamp only; cache purge arrives in M5).
+- [x] `POST /admin/tuples`.
+- [x] Invalidator consumer with the `tuple_changed` actions (re-stamp only; cache purge arrives in M5).
 
 Tests:
 

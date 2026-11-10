@@ -72,6 +72,18 @@ async def delete_chunks(
     )
 
 
+async def set_principals(
+    client: AsyncQdrantClient, settings: Settings, doc_id: str, principals: list[str]
+) -> None:
+    """Overwrite `principals` on every chunk of the document, whatever its version."""
+    await client.set_payload(
+        settings.chunks_name,
+        payload={"principals": principals},
+        points=_chunk_filter(doc_id, None, None),
+        wait=True,
+    )
+
+
 async def search_chunks(
     client: AsyncQdrantClient,
     settings: Settings,

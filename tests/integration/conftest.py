@@ -15,6 +15,7 @@ from rag.api.auth import authenticate
 from rag.api.main import app
 from rag.common import opensearch_, qdrant_, redis_
 from rag.common.config import Settings
+from rag.common.keys import JOBS_GROUP, JOBS_STREAM
 from rag.common.migrate import migrate
 from rag.common.seed import seed
 from rag.worker.index import Deps
@@ -90,7 +91,7 @@ async def deps(settings: Settings, tmp_path: Path) -> AsyncIterator[Deps]:
 @pytest.fixture
 async def ingested(deps: Deps) -> Deps:
     """Worker dependencies after the whole fixture corpus has been indexed."""
-    await redis_.ensure_jobs_group(deps.redis)
+    await redis_.ensure_group(deps.redis, JOBS_STREAM, JOBS_GROUP)
     await reconcile(deps.settings, deps.pg, deps.redis)
     while await consume_once(deps, "test"):
         pass

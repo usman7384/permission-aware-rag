@@ -61,6 +61,22 @@ async def delete_chunks(
     )
 
 
+async def set_principals(
+    client: AsyncOpenSearch, settings: Settings, doc_id: str, principals: list[str]
+) -> None:
+    """Overwrite `principals` on every chunk of the document, whatever its version."""
+    body = {
+        "query": {"term": {"doc_id": doc_id}},
+        "script": {
+            "source": "ctx._source.principals = params.principals",
+            "params": {"principals": principals},
+        },
+    }
+    response = await client.update_by_query(index=settings.chunks_name, body=body, refresh=True)
+    if response["failures"]:
+        raise RuntimeError(f"OpenSearch principals update failed: {response['failures']}")
+
+
 async def search_chunks(
     client: AsyncOpenSearch, settings: Settings, text: str, principals: list[str], size: int
 ) -> list[dict[str, Any]]:

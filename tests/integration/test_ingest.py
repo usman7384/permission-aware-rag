@@ -4,7 +4,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from rag.common import redis_
 from rag.common.ids import doc_id
-from rag.common.keys import CHANGES_STREAM
+from rag.common.keys import CHANGES_STREAM, JOBS_GROUP, JOBS_STREAM
 from rag.worker.chunk import chunk
 from rag.worker.index import Deps
 from rag.worker.main import consume_once
@@ -16,7 +16,7 @@ API_LIMITS = "specs/api-limits.md"
 
 async def ingest(deps: Deps) -> None:
     """Reconcile the corpus and process jobs until the stream is drained."""
-    await redis_.ensure_jobs_group(deps.redis)
+    await redis_.ensure_group(deps.redis, JOBS_STREAM, JOBS_GROUP)
     await reconcile(deps.settings, deps.pg, deps.redis)
     while await consume_once(deps, "test"):
         pass

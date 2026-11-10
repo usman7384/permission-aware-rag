@@ -3,11 +3,11 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from rag.api.auth import ApiError, authenticate
@@ -119,3 +119,30 @@ async def ask_endpoint(
             caller = await authenticate(conn, x_api_key)
     events = ask(deps, caller, body.session_id, body.question, request_id, timings)
     return StreamingResponse(server_sent_events(events), media_type="text/event-stream")
+
+
+class TupleChange(BaseModel):
+    op: Literal["add", "remove"]
+    subject: str
+    relation: Literal["member", "viewer", "parent"]
+    object: str
+
+
+@app.post("/admin/tuples", status_code=204)
+async def admin_tuples(
+    body: TupleChange,
+    request: Request,
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Write or delete a tuple, then announce it on `events:changes` once it is committed."""
+    deps: Deps = request.app.state.deps
+    request_id = str(uuid.uuid4())
+    async with deps.pg.connection() as conn:
+        caller = await authenticate(conn, x_api_key)
+        if not caller.is_admin:
+            raise ApiError(401, "unauthorized", "an admin API key is required")
+        write = pg.insert_tuple if body.op == "add" else pg.delete_tuple
+        await write(conn, body.subject, body.relation, body.object)
+    await redis_.emit_tuple_change(deps.redis, body.subject, body.relation, body.object)
+    log("tuple_changed", request_id=request_id, user_id=caller.user_id, **body.model_dump())
+    return Response(status_code=204)
