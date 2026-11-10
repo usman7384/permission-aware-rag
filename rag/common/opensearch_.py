@@ -59,3 +59,31 @@ async def delete_chunks(
         refresh=True,
         conflicts="proceed",
     )
+
+
+async def search_chunks(
+    client: AsyncOpenSearch, settings: Settings, text: str, principals: list[str], size: int
+) -> list[dict[str, Any]]:
+    """BM25 matches on `text` among chunks whose `principals` share one of `principals`."""
+    body = {
+        "size": size,
+        "_source": ["chunk_id", "parent_id", "doc_id", "version"],
+        "query": {
+            "bool": {
+                "must": [{"match": {"text": text}}],
+                "filter": [{"terms": {"principals": principals}}],
+            }
+        },
+    }
+    response = await client.search(index=settings.chunks_name, body=body)
+    return [hit["_source"] for hit in response["hits"]["hits"]]
+
+
+async def get_texts(
+    client: AsyncOpenSearch, settings: Settings, chunk_ids: list[str]
+) -> dict[str, str]:
+    """Indexed text by chunk_id; chunks no longer in the index are absent."""
+    response = await client.mget(
+        index=settings.chunks_name, body={"ids": chunk_ids}, _source=["text"]
+    )
+    return {doc["_id"]: doc["_source"]["text"] for doc in response["docs"] if doc.get("found")}

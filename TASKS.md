@@ -53,10 +53,10 @@ Covers success check 2.
 
 Spec: sections 7, 8 (steps 1, 2, 6, 8 to 12).
 
-- [ ] `expand_principals`, `document_readers`, `readable_docs`.
-- [ ] Stamping `principals` during ingestion.
-- [ ] `authenticate` (without the rate limit), `expand`, `embed`, `retrieve`, `rrf`, `recheck`, `rerank`, `hydrate` (Postgres only for now).
-- [ ] A temporary `POST /search` endpoint returning the parents, used by tests; remove it in M3.
+- [x] `expand_principals`, `document_readers`, `readable_docs`.
+- [x] Stamping `principals` during ingestion.
+- [x] `authenticate` (without the rate limit), `expand`, `embed`, `retrieve`, `rrf`, `recheck`, `rerank`, `hydrate` (Postgres only for now).
+- [x] A temporary `POST /search` endpoint returning the parents, used by tests; remove it in M3.
 
 Tests:
 

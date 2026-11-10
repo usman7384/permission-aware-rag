@@ -87,6 +87,26 @@ class FakeReranker:
         return [float(len(query_tokens & set(tokens(p)))) for p in passages]
 
 
+class CrossEncoderReranker:
+    """A sentence-transformers cross-encoder returning raw logits."""
+
+    def __init__(self, model_name: str) -> None:
+        # Imported here so the fake backend never loads torch.
+        import torch
+        from sentence_transformers import CrossEncoder
+
+        self.model = CrossEncoder(model_name, activation_fn=torch.nn.Identity())
+
+    def score(self, query: str, passages: list[str]) -> list[float]:
+        return self.model.predict([(query, p) for p in passages]).tolist()
+
+
+def make_reranker(settings: Settings) -> Reranker:
+    if settings.model_backend == "fake":
+        return FakeReranker()
+    return CrossEncoderReranker(settings.rerank_model)
+
+
 def _rewrite(user: str) -> str:
     """Join the last `user:` turn line and the `question:` line of a rewrite prompt."""
     lines = user.splitlines()

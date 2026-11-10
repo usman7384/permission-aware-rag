@@ -5,6 +5,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PayloadSchemaType,
     PointStruct,
@@ -69,3 +70,18 @@ async def delete_chunks(
     await client.delete(
         settings.chunks_name, points_selector=_chunk_filter(doc_id, lt, gte), wait=True
     )
+
+
+async def search_chunks(
+    client: AsyncQdrantClient,
+    settings: Settings,
+    vector: list[float],
+    principals: list[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Payloads of the nearest chunks whose `principals` share at least one of `principals`."""
+    allowed = Filter(must=[FieldCondition(key="principals", match=MatchAny(any=principals))])
+    response = await client.query_points(
+        settings.chunks_name, query=vector, query_filter=allowed, limit=limit, with_payload=True
+    )
+    return [point.payload for point in response.points]

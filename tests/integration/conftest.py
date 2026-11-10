@@ -4,16 +4,20 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 import pytest
+from fixture_corpus import CORPUS
 from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 
-from rag.common import opensearch_, qdrant_
+from rag.api.main import app
+from rag.common import opensearch_, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.migrate import migrate
 from rag.common.seed import seed
 from rag.worker.index import Deps
-from rag.worker.main import close_deps, open_deps
+from rag.worker.main import close_deps, consume_once, open_deps
+from rag.worker.watch import reconcile
 
 TEST_DB = "test_rag"
 DEV_SETTINGS = Settings()
@@ -25,7 +29,6 @@ TEST_SETTINGS = Settings(
     abstain_threshold=1,
     worker_block_ms=100,
 )
-FIXTURE_CORPUS = Path(__file__).parents[1] / "fixtures" / "corpus"
 # The API reads Settings() from the environment, so point it at the test stores.
 os.environ.update(
     PG_DSN=TEST_SETTINGS.pg_dsn,
@@ -71,7 +74,7 @@ async def _reset_stores(settings: Settings) -> None:
 async def deps(settings: Settings, tmp_path: Path) -> AsyncIterator[Deps]:
     """Worker dependencies on freshly emptied test stores, watching a copy of the fixture corpus."""
     corpus = tmp_path / "corpus"
-    shutil.copytree(FIXTURE_CORPUS, corpus)
+    shutil.copytree(CORPUS, corpus)
     worker_settings = settings.model_copy(update={"corpus_dir": str(corpus)})
     await _reset_stores(worker_settings)
     deps = await open_deps(worker_settings)
@@ -80,3 +83,22 @@ async def deps(settings: Settings, tmp_path: Path) -> AsyncIterator[Deps]:
         yield deps
     finally:
         await close_deps(deps)
+
+
+@pytest.fixture
+async def ingested(deps: Deps) -> Deps:
+    """Worker dependencies after the whole fixture corpus has been indexed."""
+    await redis_.ensure_jobs_group(deps.redis)
+    await reconcile(deps.settings, deps.pg, deps.redis)
+    while await consume_once(deps, "test"):
+        pass
+    return deps
+
+
+@pytest.fixture
+async def client(ingested: Deps) -> AsyncIterator[httpx.AsyncClient]:
+    """An API client over the ingested fixture corpus."""
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client

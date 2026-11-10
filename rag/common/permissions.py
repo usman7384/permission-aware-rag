@@ -24,5 +24,18 @@ def parent_tuples(path: str, doc: UUID) -> list[tuple[str, str, str]]:
     return found
 
 
+async def expand_principals(conn: AsyncConnection, user: str) -> list[str]:
+    return await pg.select_principals(conn, user)
+
+
 async def document_readers(conn: AsyncConnection, doc: UUID) -> list[str]:
     return await pg.select_document_readers(conn, f"doc:{doc}")
+
+
+async def readable_docs(
+    conn: AsyncConnection, principals: list[str], doc_ids: list[str]
+) -> set[str]:
+    """The subset of `doc_ids` that `principals` may read, from the live tuples."""
+    if not doc_ids:
+        return set()
+    return await pg.select_readable_docs(conn, principals, doc_ids)

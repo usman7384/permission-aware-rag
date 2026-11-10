@@ -126,3 +126,67 @@ async def select_document_readers(conn: AsyncConnection, obj: str) -> list[str]:
         {"doc": obj},
     )
     return [subject for (subject,) in await cur.fetchall()]
+
+
+async def select_principals(conn: AsyncConnection, user: str) -> list[str]:
+    """The user plus every group reachable through `member` tuples, sorted."""
+    cur = await conn.execute(
+        "WITH RECURSIVE g(principal) AS ("
+        "  SELECT %(user)s::text"
+        "  UNION"
+        "  SELECT t.object FROM tuples t JOIN g ON t.subject = g.principal"
+        "  WHERE t.relation = 'member'"
+        ") "
+        "SELECT principal FROM g ORDER BY principal",
+        {"user": user},
+    )
+    return [principal for (principal,) in await cur.fetchall()]
+
+
+async def select_readable_docs(
+    conn: AsyncConnection, principals: list[str], doc_ids: list[str]
+) -> set[str]:
+    """The doc_ids on which one of `principals` is a viewer, directly or through a folder."""
+    cur = await conn.execute(
+        "WITH RECURSIVE anc(doc_id, obj) AS ("
+        "  SELECT d, 'doc:' || d FROM unnest(%(docs)s::uuid[]) AS d"
+        "  UNION"
+        "  SELECT anc.doc_id, t.object FROM tuples t JOIN anc ON t.subject = anc.obj"
+        "  WHERE t.relation = 'parent'"
+        ") "
+        "SELECT DISTINCT anc.doc_id::text FROM anc JOIN tuples t ON t.object = anc.obj "
+        "WHERE t.relation = 'viewer' AND t.subject = ANY(%(principals)s::text[])",
+        {"docs": doc_ids, "principals": principals},
+    )
+    return {doc for (doc,) in await cur.fetchall()}
+
+
+async def live_document_versions(conn: AsyncConnection, doc_ids: list[str]) -> dict[str, int]:
+    """Current version of each listed document that is not deleted."""
+    cur = await conn.execute(
+        "SELECT doc_id::text, version FROM documents "
+        "WHERE doc_id = ANY(%s::uuid[]) AND deleted_at IS NULL",
+        (doc_ids,),
+    )
+    return dict(await cur.fetchall())
+
+
+async def get_api_key(conn: AsyncConnection, key_hash: str) -> tuple[str, bool] | None:
+    """(user_id, is_admin) for a key hash, or None if the key is unknown."""
+    cur = await conn.execute(
+        "SELECT user_id, is_admin FROM api_keys WHERE key_hash = %s", (key_hash,)
+    )
+    return await cur.fetchone()
+
+
+async def get_parents(
+    conn: AsyncConnection, parent_ids: list[str]
+) -> list[tuple[str, str, int, str, str | None, str]]:
+    """Rows (parent_id, doc_id, version, path, heading, text) for the listed parents."""
+    cur = await conn.execute(
+        "SELECT p.parent_id::text, p.doc_id::text, p.version, d.path, p.heading, p.text "
+        "FROM parents p JOIN documents d ON d.doc_id = p.doc_id "
+        "WHERE p.parent_id = ANY(%s::uuid[])",
+        (parent_ids,),
+    )
+    return await cur.fetchall()
