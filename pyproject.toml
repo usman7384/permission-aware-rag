@@ -1,0 +1,47 @@
+[project]
+name = "rag-laptop"
+version = "0.1.0"
+description = "Laptop RAG service with permissions, hybrid search, caches and evaluation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "psycopg[binary,pool]",
+    "redis",
+    "qdrant-client",
+    "opensearch-py[async]",
+    "httpx",
+]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+filterwarnings = [
+    "ignore:enable_cleanup_closed ignored:DeprecationWarning:aiohttp",
+]
+markers = [
+    "unit: no network, no services, no model downloads",
+    "integration: requires the Compose stores",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
