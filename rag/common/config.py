@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     history_turns: int = 4
     max_question_chars: int = 2000
     rate_limit_per_min: int = 60
+    rate_limit_ttl_s: int = 120
+    rewrite_max_tokens: int = 256
 
     retrieve_timeout_ms: int = 500
     rerank_timeout_ms: int = 2000

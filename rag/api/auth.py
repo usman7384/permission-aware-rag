@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
 from psycopg import AsyncConnection
+from redis.asyncio import Redis
 
-from rag.common import pg
+from rag.common import pg, redis_
+from rag.common.config import Settings
 from rag.common.keys import api_key_hash
 
 
@@ -23,11 +25,18 @@ class Caller:
     key_hash: str
 
 
-async def authenticate(conn: AsyncConnection, api_key: str | None) -> Caller:
-    """Look up the user behind an `X-API-Key`; unknown or missing keys raise a 401."""
+async def authenticate(
+    conn: AsyncConnection, redis: Redis, settings: Settings, api_key: str | None
+) -> Caller:
+    """Look up the user behind an `X-API-Key` (401 if unknown) and count the request (429 if
+    over the limit)."""
     key_hash = api_key_hash(api_key or "")
     row = await pg.get_api_key(conn, key_hash) if api_key else None
     if row is None:
         raise ApiError(401, "unauthorized", "unknown API key")
+    if await redis_.count_request(redis, key_hash, settings.rate_limit_ttl_s) > (
+        settings.rate_limit_per_min
+    ):
+        raise ApiError(429, "rate_limited", "too many requests this minute")
     user_id, is_admin = row
     return Caller(user_id=user_id, is_admin=is_admin, key_hash=key_hash)

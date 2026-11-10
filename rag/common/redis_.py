@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 from typing import Any
 
@@ -14,6 +15,7 @@ from rag.common.keys import (
     answer_key,
     chunk_key,
     doc_answers_key,
+    rate_limit_key,
 )
 
 Message = tuple[str, dict[str, str]]
@@ -92,6 +94,16 @@ async def emit_tuple_change(client: Redis, subject: str, relation: str, obj: str
         CHANGES_STREAM,
         {"type": "tuple_changed", "subject": subject, "relation": relation, "object": obj},
     )
+
+
+async def count_request(client: Redis, key_hash: str, ttl_s: int) -> int:
+    """Increment the key's counter for the current minute and return it."""
+    key = rate_limit_key(key_hash, int(time.time()) // 60)
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.incr(key)
+        pipe.expire(key, ttl_s)
+        count, _ = await pipe.execute()
+    return count
 
 
 async def get_answer(client: Redis, cache_key: str) -> dict[str, Any] | None:

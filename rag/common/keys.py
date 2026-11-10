@@ -36,3 +36,7 @@ def chunk_key(parent_id: str) -> str:
 
 def doc_answers_key(doc_id: str) -> str:
     return f"doc2ans:{doc_id}"
+
+
+def rate_limit_key(key_hash: str, epoch_minute: int) -> str:
+    return f"rl:{key_hash}:{epoch_minute}"

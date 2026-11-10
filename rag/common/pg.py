@@ -225,12 +225,27 @@ async def insert_turn(
     )
 
 
+async def recent_turns(
+    conn: AsyncConnection, session_id: str, user_id: str, limit: int
+) -> list[tuple[str, str]]:
+    """The user's last `limit` turns (role, text) in the session, oldest first."""
+    cur = await conn.execute(
+        "SELECT role, text FROM ("
+        "  SELECT turn_id, role, text FROM turns WHERE session_id = %s AND user_id = %s"
+        "  ORDER BY turn_id DESC LIMIT %s"
+        ") recent ORDER BY turn_id",
+        (session_id, user_id, limit),
+    )
+    return await cur.fetchall()
+
+
 async def insert_request(
     conn: AsyncConnection,
     request_id: str,
     user_id: str,
     session_id: str,
     question: str,
+    rewritten: str | None,
     cache_tier: str,
     abstained: bool,
     degraded: list[str],
@@ -239,15 +254,16 @@ async def insert_request(
     answer: str,
 ) -> None:
     await conn.execute(
-        "INSERT INTO requests (request_id, user_id, session_id, question, cache_tier, "
-        "abstained, degraded, doc_ids, timings, answer) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::uuid[], %s, %s) "
+        "INSERT INTO requests (request_id, user_id, session_id, question, rewritten, "
+        "cache_tier, abstained, degraded, doc_ids, timings, answer) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::uuid[], %s, %s) "
         "ON CONFLICT (request_id) DO NOTHING",
         (
             request_id,
             user_id,
             session_id,
             question,
+            rewritten,
             cache_tier,
             abstained,
             degraded,
@@ -256,3 +272,15 @@ async def insert_request(
             answer,
         ),
     )
+
+
+async def insert_feedback(
+    conn: AsyncConnection, request_id: str, user_id: str, rating: int, comment: str | None
+) -> bool:
+    """Store feedback on one of the user's requests; False if there is no such request."""
+    cur = await conn.execute(
+        "INSERT INTO feedback (request_id, rating, comment) "
+        "SELECT request_id, %s, %s FROM requests WHERE request_id = %s AND user_id = %s",
+        (rating, comment, request_id, user_id),
+    )
+    return cur.rowcount == 1

@@ -133,10 +133,10 @@ Covers success check 6.
 
 Spec: sections 8 (steps 1, 3, 4), 8.1, 10 (`/feedback`).
 
-- [ ] `prompts/rewrite_v1.txt` and `rewrite`.
-- [ ] `input_guard`.
-- [ ] Rate limit in `authenticate`.
-- [ ] `POST /feedback`.
+- [x] `prompts/rewrite_v1.txt` and `rewrite`.
+- [x] `input_guard`.
+- [x] Rate limit in `authenticate`.
+- [x] `POST /feedback`.
 
 Tests:
 

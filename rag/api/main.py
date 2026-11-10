@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -12,7 +13,8 @@ from pydantic import BaseModel
 
 from rag.api.auth import ApiError, authenticate
 from rag.api.generate import Event
-from rag.api.pipeline import Deps, ask, timed
+from rag.api.guard import input_guard
+from rag.api.pipeline import Deps, ask, expand, timed
 from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.log import log
@@ -114,11 +116,40 @@ async def ask_endpoint(
     deps: Deps = request.app.state.deps
     request_id = str(uuid.uuid4())
     timings: dict[str, float] = {}
-    with timed(timings, "authenticate"):
-        async with deps.pg.connection() as conn:
-            caller = await authenticate(conn, x_api_key)
-    events = ask(deps, caller, body.session_id, body.question, request_id, timings)
+    async with deps.pg.connection() as conn:
+        with timed(timings, "authenticate"):
+            caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)
+        with timed(timings, "expand"):
+            principals, fp = await expand(conn, caller.user_id)
+    with timed(timings, "input_guard"):
+        input_guard(body.question, deps.settings.max_question_chars)
+    events = ask(deps, caller, principals, fp, body.session_id, body.question, request_id, timings)
     return StreamingResponse(server_sent_events(events), media_type="text/event-stream")
+
+
+class Feedback(BaseModel):
+    request_id: UUID
+    rating: Literal[1, -1]
+    comment: str | None = None
+
+
+@app.post("/feedback", status_code=204)
+async def feedback(
+    body: Feedback,
+    request: Request,
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Store a rating of one of the caller's own requests."""
+    deps: Deps = request.app.state.deps
+    async with deps.pg.connection() as conn:
+        caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)
+        stored = await pg.insert_feedback(
+            conn, str(body.request_id), caller.user_id, body.rating, body.comment
+        )
+    if not stored:
+        raise ApiError(404, "not_found", "unknown request_id")
+    log("feedback", request_id=str(body.request_id), user_id=caller.user_id, rating=body.rating)
+    return Response(status_code=204)
 
 
 class TupleChange(BaseModel):
@@ -138,7 +169,7 @@ async def admin_tuples(
     deps: Deps = request.app.state.deps
     request_id = str(uuid.uuid4())
     async with deps.pg.connection() as conn:
-        caller = await authenticate(conn, x_api_key)
+        caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)
         if not caller.is_admin:
             raise ApiError(401, "unauthorized", "an admin API key is required")
         write = pg.insert_tuple if body.op == "add" else pg.delete_tuple

@@ -17,6 +17,7 @@ from rag.api.generate import ABSTAIN_TEXT, Event, assemble, closing_events, gene
 from rag.api.hydrate import ParentHit, hydrate
 from rag.api.rerank import rerank
 from rag.api.retrieve import RetrievalUnavailable, recheck, retrieve, rrf
+from rag.api.rewrite import rewrite
 from rag.common import pg
 from rag.common.config import Settings
 from rag.common.keys import cache_key, fingerprint
@@ -170,6 +171,7 @@ async def persist(
     caller: Caller,
     session_id: str,
     question: str,
+    rewritten: str | None,
     outcome: Outcome,
     timings: dict[str, float],
 ) -> None:
@@ -183,6 +185,7 @@ async def persist(
             caller.user_id,
             session_id,
             question,
+            rewritten,
             outcome.cache_tier,
             outcome.abstained,
             outcome.degraded,
@@ -214,34 +217,47 @@ async def store_in_caches(
 async def ask(
     deps: Deps,
     caller: Caller,
+    principals: list[str],
+    fp: str,
     session_id: str,
     question: str,
     request_id: str,
     timings: dict[str, float],
 ) -> AsyncIterator[Event]:
-    """Steps 2 and 5 to 16 for an authenticated caller, as server-sent events."""
-    with timed(timings, "expand"):
-        async with deps.pg.connection() as conn:
-            principals, fp = await expand(conn, caller.user_id)
-    key = cache_key(question, fp, deps.settings.index_version)
-    cached, tier, vector = await lookup(deps, key, fp, question, request_id, timings)
-    outcome = Outcome(cache_tier=tier)
+    """Steps 4 to 16 for an authenticated, guarded question, as server-sent events."""
+    outcome = Outcome()
+    with timed(timings, "rewrite"):
+        rewritten = await rewrite(
+            deps.pg,
+            deps.llm,
+            deps.settings,
+            caller.user_id,
+            session_id,
+            question,
+            outcome.degraded,
+            request_id,
+        )
+    query = rewritten or question
+    key = cache_key(query, fp, deps.settings.index_version)
+    cached, tier, vector = await lookup(deps, key, fp, query, request_id, timings)
+    outcome.cache_tier = tier
     if cached is not None:
         for event in replay(cached, outcome):
             yield event
     elif vector is not None:
         try:
-            parents, outcome.degraded = await search(
-                deps, principals, question, vector, request_id, timings
-            )
+            parents, failed = await search(deps, principals, query, vector, request_id, timings)
         except RetrievalUnavailable as exc:
             log("ask_failed", request_id=request_id, code="retrieval_unavailable", error=str(exc))
             yield "error", {"code": "retrieval_unavailable", "message": str(exc)}
             return
-        async for event in answer(deps, parents, question, request_id, timings, outcome):
+        outcome.degraded += failed
+        async for event in answer(deps, parents, query, request_id, timings, outcome):
             yield event
     with timed(timings, "persist"):
-        await persist(deps.pg, request_id, caller, session_id, question, outcome, timings)
+        await persist(
+            deps.pg, request_id, caller, session_id, question, rewritten, outcome, timings
+        )
     log(
         "ask_done",
         request_id=request_id,
@@ -262,4 +278,4 @@ async def ask(
     )
     # Step 16: the caches are written after the last event has been sent.
     if outcome.cacheable and vector is not None:
-        await store_in_caches(deps, key, fp, question, vector, outcome, request_id)
+        await store_in_caches(deps, key, fp, query, vector, outcome, request_id)

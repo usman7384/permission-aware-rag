@@ -117,7 +117,7 @@ def api_deps(client: httpx.AsyncClient) -> pipeline.Deps:
 async def search_paths(deps: pipeline.Deps, api_key: str, question: str) -> set[str]:
     """Paths of the parents that retrieval returns for a fixture API key."""
     async with deps.pg.connection() as conn:
-        caller = await authenticate(conn, api_key)
+        caller = await authenticate(conn, deps.redis, deps.settings, api_key)
         principals, _ = await pipeline.expand(conn, caller.user_id)
     vector = await pipeline.embed(deps.embedder, question)
     parents, degraded = await pipeline.search(deps, principals, question, vector, "test", {})
