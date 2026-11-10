@@ -42,7 +42,7 @@ async def stamp(conn: AsyncConnection, path: str, doc: UUID) -> list[str]:
     return await document_readers(conn, doc)
 
 
-def _chunk_payloads(
+def chunk_payloads(
     doc: UUID,
     version: int,
     parents: list[Parent],
@@ -75,7 +75,7 @@ async def index_new(
 ) -> int:
     """Embed the children and write them to Qdrant and OpenSearch; returns the chunk count."""
     s = deps.settings
-    payloads, texts = _chunk_payloads(doc, version, parents, contexts, principals)
+    payloads, texts = chunk_payloads(doc, version, parents, contexts, principals)
     # Chunks left by an earlier failed attempt at this version must not survive the commit.
     await qdrant_.delete_chunks(deps.qdrant, s, str(doc), gte=version)
     await opensearch_.delete_chunks(deps.opensearch, s, str(doc), gte=version)

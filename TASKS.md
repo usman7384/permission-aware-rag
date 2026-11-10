@@ -189,10 +189,10 @@ Do not start until the owner confirms Phase 1. Each experiment is one script in 
 
 ### M9. Scale-up
 
-- [ ] A loader for a public retrieval benchmark with relevance labels (the owner chooses the dataset and size), writing through the normal index functions with batching.
-- [ ] Vector quantization and on-disk original vectors in Qdrant, behind settings.
-- [ ] A generator for synthetic folders, groups and tuples with a target filter selectivity.
-- [ ] `score.py` gains nDCG@10 and recall@100 against the benchmark labels.
+- [x] A loader for a public retrieval benchmark with relevance labels (the owner chooses the dataset and size), writing through the normal index functions with batching.
+- [x] Vector quantization and on-disk original vectors in Qdrant, behind settings.
+- [x] A generator for synthetic folders, groups and tuples with a target filter selectivity.
+- [x] `score.py` gains nDCG@10 and recall@100 against the benchmark labels.
 
 ### M10. Experiments
 

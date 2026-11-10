@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     embed_query_prefix: str = "Represent this sentence for searching relevant passages: "
     embed_dim: int = 384
+    qdrant_quantization: Literal["none", "int8", "binary"] = "none"
+    qdrant_vectors_on_disk: bool = False
 
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -47,6 +49,7 @@ class Settings(BaseSettings):
     rerank_timeout_ms: int = 2000
     llm_timeout_s: float = 30
     store_timeout_s: float = 5
+    download_timeout_s: float = 120
     fault_slow_ms: int = 5000
     max_deliveries: int = 3
     reclaim_idle_ms: int = 30000

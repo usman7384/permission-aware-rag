@@ -7,13 +7,13 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import pytest
 from fixture_corpus import CORPUS
-from psycopg import AsyncConnection, sql
+from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
 from rag.api import pipeline
 from rag.api.auth import authenticate
 from rag.api.main import app
-from rag.common import opensearch_, qdrant_, redis_
+from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.keys import JOBS_GROUP, JOBS_STREAM
 from rag.common.migrate import migrate
@@ -42,16 +42,9 @@ os.environ.update(
 )
 
 
-async def _create_test_database() -> None:
-    async with await AsyncConnection.connect(DEV_SETTINGS.pg_dsn, autocommit=True) as conn:
-        cur = await conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (TEST_DB,))
-        if await cur.fetchone() is None:
-            await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEST_DB)))
-
-
 @pytest.fixture(scope="session")
 async def settings() -> Settings:
-    await _create_test_database()
+    await pg.ensure_database(DEV_SETTINGS.pg_dsn, TEST_DB, DEV_SETTINGS.store_timeout_s)
     await migrate(TEST_SETTINGS, job_id="test-migrate")
     return TEST_SETTINGS
 

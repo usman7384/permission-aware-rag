@@ -71,6 +71,15 @@ make eval               # score the golden set, print the table, store an eval_r
 
 Integration tests use the Postgres database `test_rag`, Qdrant collections and an OpenSearch index prefixed `test_`, and Redis database 15, so they never touch development data. They use the deterministic fake models and never call a paid API. The first PDF test downloads the docling models once. `make eval` uses the models and stores configured in `.env`; for numbers that mean anything, use `MODEL_BACKEND=real`, real LLM keys and your own corpus and golden questions.
 
+### Benchmark (Phase 2)
+
+```
+make bench-load         # download BEIR SciFact into data/ and index it into separate stores
+make bench-eval         # recall@10, recall@100, nDCG@10 and MRR against the SciFact test labels
+```
+
+`make bench-load` runs `python -m rag.evals.benchmark`; it downloads the dataset once from the BEIR site into the git-ignored `data/beir/`, and writes into the Postgres database `rag_bench` and Qdrant collections and an OpenSearch index prefixed `bench_`, never into development data. Every document gets a synthetic folder, and the user `user:bench` gets group memberships that let it read a chosen share of them: `--folders 1000 --selectivity 0.01` gives 1% (`--help` lists the other options, such as `--limit` for a smaller load and `--dataset` for another BEIR dataset). Changing only `--selectivity` re-runs quickly, because it changes memberships, not the index. A different `--folders` needs a fresh `--database` and `--prefix`. `QDRANT_QUANTIZATION` (`int8` or `binary`) and `QDRANT_VECTORS_ON_DISK=true` choose how the chunk vectors are stored when a collection is created.
+
 `tests/fixtures/make_pdf.py` regenerates the fixture PDF byte for byte (`uv run python tests/fixtures/make_pdf.py`).
 
 ## Pinned images

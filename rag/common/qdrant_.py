@@ -2,14 +2,20 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
+    BinaryQuantization,
+    BinaryQuantizationConfig,
     Distance,
     FieldCondition,
     Filter,
     MatchAny,
     MatchValue,
+    Memory,
     PayloadSchemaType,
     PointStruct,
     Range,
+    ScalarQuantization,
+    ScalarQuantizationConfig,
+    ScalarType,
     VectorParams,
 )
 
@@ -24,17 +30,34 @@ async def ping(client: AsyncQdrantClient) -> None:
     await client.get_collections()
 
 
+def chunk_vector_params(settings: Settings) -> VectorParams:
+    """Chunk vectors, optionally quantized (kept in RAM) with the originals left on disk."""
+    quantization: ScalarQuantization | BinaryQuantization | None = None
+    if settings.qdrant_quantization == "int8":
+        config = ScalarQuantizationConfig(type=ScalarType.INT8, memory=Memory.PINNED)
+        quantization = ScalarQuantization(scalar=config)
+    elif settings.qdrant_quantization == "binary":
+        quantization = BinaryQuantization(binary=BinaryQuantizationConfig(memory=Memory.PINNED))
+    return VectorParams(
+        size=settings.embed_dim,
+        distance=Distance.COSINE,
+        quantization_config=quantization,
+        memory=Memory.COLD if settings.qdrant_vectors_on_disk else None,
+    )
+
+
 async def ensure_collections(client: AsyncQdrantClient, settings: Settings) -> None:
     """Create the chunks and answer-cache collections and their payload indexes if missing."""
-    indexed_fields = {
-        settings.chunks_name: ["principals", "doc_id"],
-        settings.answer_cache_name: ["fingerprint", "doc_ids"],
+    collections = {
+        settings.chunks_name: (chunk_vector_params(settings), ["principals", "doc_id"]),
+        settings.answer_cache_name: (
+            VectorParams(size=settings.embed_dim, distance=Distance.COSINE),
+            ["fingerprint", "doc_ids"],
+        ),
     }
-    for name, fields in indexed_fields.items():
+    for name, (vectors, fields) in collections.items():
         if not await client.collection_exists(name):
-            await client.create_collection(
-                name, vectors_config=VectorParams(size=settings.embed_dim, distance=Distance.COSINE)
-            )
+            await client.create_collection(name, vectors_config=vectors)
         for field in fields:
             await client.create_payload_index(name, field, PayloadSchemaType.KEYWORD)
 

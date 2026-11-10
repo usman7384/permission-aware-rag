@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
@@ -303,3 +303,13 @@ async def insert_eval_run(
         "ON CONFLICT (run_id) DO NOTHING",
         (run_id, name, Jsonb(config), Jsonb(metrics)),
     )
+
+
+async def ensure_database(dsn: str, name: str, timeout_s: float) -> None:
+    """Create the database `name` on the server that `dsn` points to, if it is missing."""
+    async with await AsyncConnection.connect(
+        dsn, autocommit=True, connect_timeout=int(timeout_s)
+    ) as conn:
+        cur = await conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+        if await cur.fetchone() is None:
+            await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
