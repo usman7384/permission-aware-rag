@@ -13,6 +13,8 @@ dependencies = [
     "qdrant-client",
     "opensearch-py[async]",
     "httpx",
+    "sentence-transformers",
+    "watchfiles",
 ]
 
 [dependency-groups]

@@ -1,4 +1,4 @@
-.PHONY: up down migrate seed api test test-int lint
+.PHONY: up down migrate seed api worker test test-int lint
 
 up:
 	docker compose up -d --wait
@@ -11,6 +11,9 @@ migrate:
 
 seed:
 	uv run python -m rag.common.seed
+
+worker:
+	uv run python -m rag.worker.main
 
 api:
 	uv run uvicorn rag.api.main:app --loop asyncio:SelectorEventLoop

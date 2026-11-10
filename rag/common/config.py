@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     store_timeout_s: float = 5
     fault_slow_ms: int = 5000
     max_deliveries: int = 3
+    reclaim_idle_ms: int = 30000
+    worker_block_ms: int = 2000
 
     pg_dsn: str = "postgresql://rag:rag@127.0.0.1:5432/rag"
     redis_url: str = "redis://127.0.0.1:6380/0"

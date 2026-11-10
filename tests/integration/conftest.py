@@ -1,12 +1,19 @@
 import os
+import shutil
+from collections.abc import AsyncIterator
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 
+from rag.common import opensearch_, qdrant_
 from rag.common.config import Settings
 from rag.common.migrate import migrate
+from rag.common.seed import seed
+from rag.worker.index import Deps
+from rag.worker.main import close_deps, open_deps
 
 TEST_DB = "test_rag"
 DEV_SETTINGS = Settings()
@@ -16,7 +23,9 @@ TEST_SETTINGS = Settings(
     store_prefix="test_",
     model_backend="fake",
     abstain_threshold=1,
+    worker_block_ms=100,
 )
+FIXTURE_CORPUS = Path(__file__).parents[1] / "fixtures" / "corpus"
 # The API reads Settings() from the environment, so point it at the test stores.
 os.environ.update(
     PG_DSN=TEST_SETTINGS.pg_dsn,
@@ -39,3 +48,35 @@ async def settings() -> Settings:
     await _create_test_database()
     await migrate(TEST_SETTINGS, job_id="test-migrate")
     return TEST_SETTINGS
+
+
+async def _reset_stores(settings: Settings) -> None:
+    """Empty the test stores and reload the fixture tuples and keys."""
+    assert settings.store_prefix == "test_" and settings.redis_url.endswith("/15")
+    async with await AsyncConnection.connect(settings.pg_dsn) as conn:
+        await conn.execute("TRUNCATE documents, tuples, api_keys CASCADE")
+        await seed(conn)
+    qdrant = qdrant_.connect(settings)
+    opensearch = opensearch_.connect(settings)
+    try:
+        await qdrant.delete_collection(settings.chunks_name)
+        await opensearch.indices.delete(index=settings.chunks_name, ignore_unavailable=True)
+    finally:
+        await qdrant.close()
+        await opensearch.close()
+    await migrate(settings, job_id="test-reset")
+
+
+@pytest.fixture
+async def deps(settings: Settings, tmp_path: Path) -> AsyncIterator[Deps]:
+    """Worker dependencies on freshly emptied test stores, watching a copy of the fixture corpus."""
+    corpus = tmp_path / "corpus"
+    shutil.copytree(FIXTURE_CORPUS, corpus)
+    worker_settings = settings.model_copy(update={"corpus_dir": str(corpus)})
+    await _reset_stores(worker_settings)
+    deps = await open_deps(worker_settings)
+    await deps.redis.flushdb()
+    try:
+        yield deps
+    finally:
+        await close_deps(deps)

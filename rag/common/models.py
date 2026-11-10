@@ -3,6 +3,7 @@ import math
 from collections.abc import AsyncIterator
 from typing import Protocol
 
+from rag.common.config import Settings
 from rag.common.text import tokens
 
 
@@ -12,6 +13,8 @@ class Embedder(Protocol):
     def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
 
     def embed_query(self, text: str) -> list[float]: ...
+
+    def count_tokens(self, text: str) -> int: ...
 
 
 class Reranker(Protocol):
@@ -44,6 +47,36 @@ class FakeEmbedder:
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_query(text) for text in texts]
+
+    def count_tokens(self, text: str) -> int:
+        return len(tokens(text))
+
+
+class SentenceTransformerEmbedder:
+    """A sentence-transformers model with L2-normalized output and a query prefix."""
+
+    def __init__(self, model_name: str, query_prefix: str) -> None:
+        # Imported here so the fake backend never loads torch.
+        from sentence_transformers import SentenceTransformer
+
+        self.model = SentenceTransformer(model_name)
+        self.dim = self.model.get_embedding_dimension()
+        self.query_prefix = query_prefix
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.model.encode(texts, normalize_embeddings=True).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.model.encode(self.query_prefix + text, normalize_embeddings=True).tolist()
+
+    def count_tokens(self, text: str) -> int:
+        return len(self.model.tokenizer(text, add_special_tokens=False)["input_ids"])
+
+
+def make_embedder(settings: Settings) -> Embedder:
+    if settings.model_backend == "fake":
+        return FakeEmbedder(settings.embed_dim)
+    return SentenceTransformerEmbedder(settings.embed_model, settings.embed_query_prefix)
 
 
 class FakeReranker:

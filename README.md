@@ -12,6 +12,7 @@ make up        # start Postgres, Redis, Qdrant, OpenSearch
 make migrate   # Postgres schema, Qdrant collections, OpenSearch index
 make seed      # fixture users, groups, tuples and API keys
 make api       # http://localhost:8000/healthz
+make worker    # index CORPUS_DIR and watch it for changes
 make test      # unit tests
 make test-int  # integration tests (needs make up)
 make lint

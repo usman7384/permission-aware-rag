@@ -31,11 +31,11 @@ Owner action: none.
 
 Spec: sections 9.1, 9.2, 6.
 
-- [ ] Watcher with start-up reconciliation.
-- [ ] Worker consumer loop, reclaim loop and dead-letter handling.
-- [ ] Markdown parser and chunker.
-- [ ] Index writes in the order of spec section 9.2, steps 6 to 9.
-- [ ] Delete jobs.
+- [x] Watcher with start-up reconciliation.
+- [x] Worker consumer loop, reclaim loop and dead-letter handling.
+- [x] Markdown parser and chunker.
+- [x] Index writes in the order of spec section 9.2, steps 6 to 9.
+- [x] Delete jobs.
 
 Tests:
 

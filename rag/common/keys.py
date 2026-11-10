@@ -17,3 +17,9 @@ def cache_key(question: str, fingerprint: str, index_version: str) -> str:
 
 def api_key_hash(api_key: str) -> str:
     return _sha256(api_key)
+
+
+JOBS_STREAM = "ingest:jobs"
+JOBS_GROUP = "workers"
+DEAD_STREAM = "ingest:dead"
+CHANGES_STREAM = "events:changes"
