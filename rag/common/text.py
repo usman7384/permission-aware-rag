@@ -3,11 +3,18 @@ import unicodedata
 
 _WHITESPACE = re.compile(r"\s+")
 _TOKEN = re.compile(r"[^\W_]+")
+_SENTENCE = re.compile(r".+?(?:[.!?]+\s+|\n+|\Z)", re.DOTALL)
+PII = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|(?<!\d)\d{13,19}(?!\d)")
 
 
 def tokens(text: str) -> list[str]:
     """Lowercase alphanumeric runs."""
     return [t.lower() for t in _TOKEN.findall(text)]
+
+
+def sentences(text: str) -> list[str]:
+    """Pieces ending in `.`, `!` or `?` plus whitespace, a line break, or the end of the text."""
+    return _SENTENCE.findall(text)
 
 
 def normalize_query(q: str) -> str:

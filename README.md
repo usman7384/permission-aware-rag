@@ -13,10 +13,13 @@ make migrate   # Postgres schema, Qdrant collections, OpenSearch index
 make seed      # fixture users, groups, tuples and API keys
 make api       # http://localhost:8000/healthz
 make worker    # index CORPUS_DIR and watch it for changes
+uv run python -m rag.api.client "How many paid leave days do we get?" --key dev-ben
 make test      # unit tests
 make test-int  # integration tests (needs make up)
 make lint
 ```
+
+Real answers need `LLM_BASE_URL` (for example `https://api.openai.com/v1`), `LLM_API_KEY`, `LLM_MODEL` and `LLM_SMALL_MODEL` in `.env`; without them `/ask` returns the extractive fallback with `llm` in `degraded`.
 
 ## Pinned images
 

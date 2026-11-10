@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import UUID
 
 from psycopg import AsyncConnection
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from rag.common.config import Settings
@@ -190,3 +191,45 @@ async def get_parents(
         (parent_ids,),
     )
     return await cur.fetchall()
+
+
+async def insert_turn(
+    conn: AsyncConnection, session_id: str, user_id: str, role: str, text: str
+) -> None:
+    await conn.execute(
+        "INSERT INTO turns (session_id, user_id, role, text) VALUES (%s, %s, %s, %s)",
+        (session_id, user_id, role, text),
+    )
+
+
+async def insert_request(
+    conn: AsyncConnection,
+    request_id: str,
+    user_id: str,
+    session_id: str,
+    question: str,
+    cache_tier: str,
+    abstained: bool,
+    degraded: list[str],
+    doc_ids: list[str],
+    timings: dict[str, float],
+    answer: str,
+) -> None:
+    await conn.execute(
+        "INSERT INTO requests (request_id, user_id, session_id, question, cache_tier, "
+        "abstained, degraded, doc_ids, timings, answer) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::uuid[], %s, %s) "
+        "ON CONFLICT (request_id) DO NOTHING",
+        (
+            request_id,
+            user_id,
+            session_id,
+            question,
+            cache_tier,
+            abstained,
+            degraded,
+            doc_ids,
+            Jsonb(timings),
+            answer,
+        ),
+    )

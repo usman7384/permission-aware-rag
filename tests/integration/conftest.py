@@ -10,6 +10,8 @@ from fixture_corpus import CORPUS
 from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 
+from rag.api import pipeline
+from rag.api.auth import authenticate
 from rag.api.main import app
 from rag.common import opensearch_, qdrant_, redis_
 from rag.common.config import Settings
@@ -57,7 +59,7 @@ async def _reset_stores(settings: Settings) -> None:
     """Empty the test stores and reload the fixture tuples and keys."""
     assert settings.store_prefix == "test_" and settings.redis_url.endswith("/15")
     async with await AsyncConnection.connect(settings.pg_dsn) as conn:
-        await conn.execute("TRUNCATE documents, tuples, api_keys CASCADE")
+        await conn.execute("TRUNCATE documents, tuples, api_keys, turns, requests CASCADE")
         await seed(conn)
     qdrant = qdrant_.connect(settings)
     opensearch = opensearch_.connect(settings)
@@ -102,3 +104,18 @@ async def client(ingested: Deps) -> AsyncIterator[httpx.AsyncClient]:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+
+
+@pytest.fixture
+def api_deps(client: httpx.AsyncClient) -> pipeline.Deps:
+    """The API's dependencies, while `client` keeps its lifespan open."""
+    return app.state.deps
+
+
+async def search_paths(deps: pipeline.Deps, api_key: str, question: str) -> set[str]:
+    """Paths of the parents that retrieval returns for a fixture API key."""
+    async with deps.pg.connection() as conn:
+        caller = await authenticate(conn, api_key)
+    parents, degraded = await pipeline.search(deps, caller, question, "test", {})
+    assert degraded == []
+    return {parent.path for parent in parents}

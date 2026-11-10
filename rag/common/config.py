@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     rerank_keep: int = 10
     abstain_threshold: float = 0.0
     context_token_budget: int = 6000
+    answer_max_tokens: int = 1024
     semantic_cache_threshold: float = 0.96
     answer_ttl_s: int = 3600
     chunk_ttl_s: int = 86400

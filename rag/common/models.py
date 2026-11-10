@@ -1,7 +1,10 @@
 import hashlib
+import json
 import math
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Any, Protocol
+
+import httpx
 
 from rag.common.config import Settings
 from rag.common.text import tokens
@@ -139,3 +142,57 @@ class FakeLLM:
         words = text.split(" ")
         for i, word in enumerate(words):
             yield word if i == len(words) - 1 else word + " "
+
+
+class ChatCompletionsLLM:
+    """An OpenAI-compatible chat-completions endpoint over httpx."""
+
+    def __init__(self, base_url: str, api_key: str, timeout_s: float) -> None:
+        self.base_url = base_url
+        self.headers = {"Authorization": f"Bearer {api_key}"}
+        self.timeout_s = timeout_s
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self.base_url, headers=self.headers, timeout=self.timeout_s
+        )
+
+    def _body(self, system: str, user: str, model: str, max_tokens: int) -> dict[str, Any]:
+        return {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+
+    async def complete(self, system: str, user: str, *, model: str, max_tokens: int) -> str:
+        async with self._client() as client:
+            response = await client.post(
+                "chat/completions", json=self._body(system, user, model, max_tokens)
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+
+    async def stream(
+        self, system: str, user: str, *, model: str, max_tokens: int
+    ) -> AsyncIterator[str]:
+        body = {**self._body(system, user, model, max_tokens), "stream": True}
+        async with (
+            self._client() as client,
+            client.stream("POST", "chat/completions", json=body) as response,
+        ):
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                data = line.removeprefix("data:").strip()
+                if not line.startswith("data:") or data == "[DONE]":
+                    continue
+                choices = json.loads(data)["choices"]
+                if choices and choices[0]["delta"].get("content"):
+                    yield choices[0]["delta"]["content"]
+
+
+def make_llm(settings: Settings) -> LLM:
+    if settings.model_backend == "fake":
+        return FakeLLM()
+    return ChatCompletionsLLM(
+        settings.llm_base_url or "", settings.llm_api_key or "", settings.llm_timeout_s
+    )

@@ -75,10 +75,10 @@ Covers success check 4.
 
 Spec: sections 8 (steps 13 to 16 without cache writes), 8.2, 8.3, 10 (`/ask`).
 
-- [ ] `prompts/answer_v1.txt`.
-- [ ] `assemble`, `generate`, `output_guard`, `persist` (turns and the request row).
-- [ ] `POST /ask` with the SSE events of spec section 10.
-- [ ] A minimal CLI client, `python -m rag.api.client "question" --key dev-ana`.
+- [x] `prompts/answer_v1.txt`.
+- [x] `assemble`, `generate`, `output_guard`, `persist` (turns and the request row).
+- [x] `POST /ask` with the SSE events of spec section 10.
+- [x] A minimal CLI client, `python -m rag.api.client "question" --key dev-ana`.
 
 Tests:
 

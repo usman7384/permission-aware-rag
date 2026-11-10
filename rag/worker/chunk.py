@@ -2,9 +2,9 @@ import re
 from collections.abc import Callable
 from typing import NamedTuple
 
+from rag.common.text import sentences
 from rag.worker.parse import Section, paragraphs
 
-_SENTENCE = re.compile(r".+?(?:[.!?]+\s+|\n+|\Z)", re.DOTALL)
 _WORD = re.compile(r"\s*\S+\s*")
 
 Counter = Callable[[str], int]
@@ -14,10 +14,6 @@ class Parent(NamedTuple):
     heading: str | None
     text: str
     children: list[str]
-
-
-def sentences(text: str) -> list[str]:
-    return _SENTENCE.findall(text)
 
 
 def words(text: str) -> list[str]:
