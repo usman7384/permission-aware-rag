@@ -1,11 +1,20 @@
 import json
 import uuid
+from typing import Any
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from rag.common.config import Settings
-from rag.common.keys import CHANGES_STREAM, DEAD_STREAM, JOBS_GROUP, JOBS_STREAM
+from rag.common.keys import (
+    CHANGES_STREAM,
+    DEAD_STREAM,
+    JOBS_GROUP,
+    JOBS_STREAM,
+    answer_key,
+    chunk_key,
+    doc_answers_key,
+)
 
 Message = tuple[str, dict[str, str]]
 
@@ -83,3 +92,63 @@ async def emit_tuple_change(client: Redis, subject: str, relation: str, obj: str
         CHANGES_STREAM,
         {"type": "tuple_changed", "subject": subject, "relation": relation, "object": obj},
     )
+
+
+async def get_answer(client: Redis, cache_key: str) -> dict[str, Any] | None:
+    value = await client.get(answer_key(cache_key))
+    return json.loads(value) if value else None
+
+
+async def set_answer(
+    client: Redis, cache_key: str, answer: dict[str, Any], doc_ids: list[str], ttl_s: int
+) -> None:
+    """Write `ans:` and add the key to each document's `doc2ans:` set, refreshing its TTL."""
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.set(answer_key(cache_key), json.dumps(answer), ex=ttl_s)
+        for doc in doc_ids:
+            pipe.sadd(doc_answers_key(doc), cache_key)
+            pipe.expire(doc_answers_key(doc), ttl_s)
+        await pipe.execute()
+
+
+async def purge_answers(client: Redis, doc_ids: list[str]) -> list[str]:
+    """Delete the `ans:` keys listed in the documents' `doc2ans:` sets, then the sets."""
+    cache_keys: set[str] = set()
+    for doc in doc_ids:
+        cache_keys |= await client.smembers(doc_answers_key(doc))
+    keys = [answer_key(key) for key in cache_keys] + [doc_answers_key(doc) for doc in doc_ids]
+    await client.delete(*keys)
+    return sorted(cache_keys)
+
+
+async def get_parents(client: Redis, parent_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """The cached `chunk:` values of the listed parents that are present."""
+    if not parent_ids:
+        return {}
+    values = await client.mget([chunk_key(parent) for parent in parent_ids])
+    return {
+        parent: json.loads(value)
+        for parent, value in zip(parent_ids, values, strict=True)
+        if value is not None
+    }
+
+
+async def set_parents(client: Redis, parents: dict[str, dict[str, Any]], ttl_s: int) -> None:
+    async with client.pipeline(transaction=False) as pipe:
+        for parent, value in parents.items():
+            pipe.set(chunk_key(parent), json.dumps(value), ex=ttl_s)
+        await pipe.execute()
+
+
+async def delete_parents_of(client: Redis, doc_ids: list[str]) -> int:
+    """Delete every `chunk:` key whose parent belongs to one of the documents; returns how many."""
+    keys = [key async for key in client.scan_iter(match=chunk_key("*"))]
+    values = await client.mget(keys) if keys else []
+    stale = [
+        key
+        for key, value in zip(keys, values, strict=True)
+        if value is not None and json.loads(value)["doc_id"] in doc_ids
+    ]
+    if stale:
+        await client.delete(*stale)
+    return len(stale)

@@ -113,9 +113,9 @@ Covers success check 5.
 
 Spec: sections 8 (steps 5, 7, 12, 16), 8.4, 9.3, 6.5.
 
-- [ ] Exact cache, semantic cache, hydration cache.
-- [ ] Cache writes after the response.
-- [ ] Invalidator purge for `doc_changed`, `doc_deleted` and re-stamped documents.
+- [x] Exact cache, semantic cache, hydration cache.
+- [x] Cache writes after the response.
+- [x] Invalidator purge for `doc_changed`, `doc_deleted` and re-stamped documents.
 
 Tests:
 

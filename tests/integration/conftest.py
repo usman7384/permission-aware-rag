@@ -66,6 +66,7 @@ async def _reset_stores(settings: Settings) -> None:
     opensearch = opensearch_.connect(settings)
     try:
         await qdrant.delete_collection(settings.chunks_name)
+        await qdrant.delete_collection(settings.answer_cache_name)
         await opensearch.indices.delete(index=settings.chunks_name, ignore_unavailable=True)
     finally:
         await qdrant.close()
@@ -117,6 +118,8 @@ async def search_paths(deps: pipeline.Deps, api_key: str, question: str) -> set[
     """Paths of the parents that retrieval returns for a fixture API key."""
     async with deps.pg.connection() as conn:
         caller = await authenticate(conn, api_key)
-    parents, degraded = await pipeline.search(deps, caller, question, "test", {})
+        principals, _ = await pipeline.expand(conn, caller.user_id)
+    vector = await pipeline.embed(deps.embedder, question)
+    parents, degraded = await pipeline.search(deps, principals, question, vector, "test", {})
     assert degraded == []
     return {parent.path for parent in parents}

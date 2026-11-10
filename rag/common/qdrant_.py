@@ -97,3 +97,42 @@ async def search_chunks(
         settings.chunks_name, query=vector, query_filter=allowed, limit=limit, with_payload=True
     )
     return [point.payload for point in response.points]
+
+
+async def nearest_answer(
+    client: AsyncQdrantClient, settings: Settings, vector: list[float], fingerprint: str
+) -> tuple[str, float, dict[str, Any]] | None:
+    """(point ID, similarity, payload) of the nearest cached answer with this fingerprint."""
+    same_user = Filter(
+        must=[FieldCondition(key="fingerprint", match=MatchValue(value=fingerprint))]
+    )
+    response = await client.query_points(
+        settings.answer_cache_name, query=vector, query_filter=same_user, limit=1, with_payload=True
+    )
+    if not response.points:
+        return None
+    point = response.points[0]
+    return str(point.id), point.score, point.payload or {}
+
+
+async def upsert_answer(
+    client: AsyncQdrantClient,
+    settings: Settings,
+    point_id: str,
+    vector: list[float],
+    payload: dict[str, Any],
+) -> None:
+    point = PointStruct(id=point_id, vector=vector, payload=payload)
+    await client.upsert(settings.answer_cache_name, points=[point], wait=True)
+
+
+async def delete_answer(client: AsyncQdrantClient, settings: Settings, point_id: str) -> None:
+    await client.delete(settings.answer_cache_name, points_selector=[point_id], wait=True)
+
+
+async def delete_answers_of(
+    client: AsyncQdrantClient, settings: Settings, doc_ids: list[str]
+) -> None:
+    """Delete every cached answer whose context used one of the documents."""
+    used = Filter(must=[FieldCondition(key="doc_ids", match=MatchAny(any=doc_ids))])
+    await client.delete(settings.answer_cache_name, points_selector=used, wait=True)

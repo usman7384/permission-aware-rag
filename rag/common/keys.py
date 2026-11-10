@@ -24,3 +24,15 @@ JOBS_GROUP = "workers"
 DEAD_STREAM = "ingest:dead"
 CHANGES_STREAM = "events:changes"
 CHANGES_GROUP = "invalidators"
+
+
+def answer_key(cache_key: str) -> str:
+    return f"ans:{cache_key}"
+
+
+def chunk_key(parent_id: str) -> str:
+    return f"chunk:{parent_id}"
+
+
+def doc_answers_key(doc_id: str) -> str:
+    return f"doc2ans:{doc_id}"

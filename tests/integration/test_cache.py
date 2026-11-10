@@ -1,0 +1,181 @@
+import json
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+from test_ask import Events, ask
+from test_tuple_changes import run_invalidator
+
+from rag.api import pipeline
+from rag.common import redis_
+from rag.common.ids import answer_point_id, doc_id
+from rag.common.keys import cache_key
+from rag.worker.index import Deps
+from rag.worker.main import consume_once
+
+QUESTION = "How many requests per minute does the public API allow?"
+REWORDED = "How many requests per minute does the public API permit?"
+REWORDED_NUMBER = "How many requests per minute does the public API permit for 2 keys?"
+
+
+def done(events: Events) -> dict[str, Any]:
+    name, payload = events[-1]
+    assert name == "done"
+    return payload
+
+
+def answer_events(events: Events) -> tuple[str, list[dict[str, Any]]]:
+    text = "".join(payload["text"] for name, payload in events if name == "token")
+    [citations] = [payload["items"] for name, payload in events if name == "citations"]
+    return text, citations
+
+
+async def key_for(deps: pipeline.Deps, user: str, question: str) -> str:
+    async with deps.pg.connection() as conn:
+        _, fp = await pipeline.expand(conn, user)
+    return cache_key(question, fp, deps.settings.index_version)
+
+
+async def answer_points(deps: pipeline.Deps) -> int:
+    return (await deps.qdrant.count(deps.settings.answer_cache_name)).count
+
+
+async def point_exists(deps: pipeline.Deps, key: str) -> bool:
+    found = await deps.qdrant.retrieve(deps.settings.answer_cache_name, [str(answer_point_id(key))])
+    return bool(found)
+
+
+async def cached_parent_docs(deps: pipeline.Deps) -> set[str]:
+    """The documents of the parents held in `chunk:` keys."""
+    keys = [key async for key in deps.redis.scan_iter(match="chunk:*")]
+    return {json.loads(value)["doc_id"] for value in await deps.redis.mget(keys)} if keys else set()
+
+
+def forbid(monkeypatch: pytest.MonkeyPatch, deps: pipeline.Deps) -> None:
+    """Make retrieval and the LLM fail the test if they are called."""
+
+    def called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("retrieval and the LLM must not be called on a cache hit")
+
+    monkeypatch.setattr(pipeline, "retrieve", called)
+    monkeypatch.setattr(deps.llm, "stream", called)
+    monkeypatch.setattr(deps.llm, "complete", called)
+
+
+async def test_second_identical_question_is_served_from_the_exact_cache(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await ask(client, "dev-ana", QUESTION)
+    assert done(first)["cache_tier"] == "none"
+    forbid(monkeypatch, api_deps)
+    second = await ask(client, "dev-ana", QUESTION)
+    assert done(second) | {"request_id": ""} == {
+        "request_id": "",
+        "cache_tier": "exact",
+        "degraded": [],
+        "abstained": False,
+    }
+    assert answer_events(second) == answer_events(first)
+    async with api_deps.pg.connection() as conn:
+        cur = await conn.execute(
+            "SELECT cache_tier, timings ? 'retrieve' FROM requests WHERE request_id = %s",
+            (done(second)["request_id"],),
+        )
+        assert await cur.fetchone() == ("exact", False)
+
+
+async def test_case_and_trailing_punctuation_hit_the_exact_cache(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await ask(client, "dev-ana", QUESTION)
+    forbid(monkeypatch, api_deps)
+    events = await ask(
+        client, "dev-ana", "  how many REQUESTS per minute does the public api allow"
+    )
+    assert done(events)["cache_tier"] == "exact"
+
+
+async def test_reworded_question_hits_the_semantic_cache_unless_a_number_differs(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_deps.settings, "semantic_cache_threshold", 0.8)
+    first = await ask(client, "dev-ana", QUESTION)
+    reworded = await ask(client, "dev-ana", REWORDED)
+    assert done(reworded)["cache_tier"] == "semantic"
+    assert answer_events(reworded) == answer_events(first)
+    with_number = await ask(client, "dev-ana", REWORDED_NUMBER)
+    assert done(with_number)["cache_tier"] == "none"
+
+
+async def test_one_users_cached_answer_is_never_served_to_another(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps
+) -> None:
+    await ask(client, "dev-ana", QUESTION)
+    assert done(await ask(client, "dev-ana", QUESTION))["cache_tier"] == "exact"
+    assert done(await ask(client, "dev-ben", QUESTION))["cache_tier"] == "none"
+    assert done(await ask(client, "dev-ben", QUESTION))["cache_tier"] == "exact"
+    assert await key_for(api_deps, "user:ana", QUESTION) != await key_for(
+        api_deps, "user:ben", QUESTION
+    )
+
+
+async def test_editing_a_context_document_evicts_its_cached_answer(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps, ingested: Deps
+) -> None:
+    await run_invalidator(ingested)  # drain the events of the initial ingestion
+    first = await ask(client, "dev-ana", QUESTION)
+    key = await key_for(api_deps, "user:ana", QUESTION)
+    edited = str(doc_id("specs/api-limits.md"))
+    cached = await redis_.get_answer(api_deps.redis, key)
+    assert cached is not None and edited in cached["doc_ids"]
+    assert await api_deps.redis.sismember(f"doc2ans:{edited}", key)
+    assert await point_exists(api_deps, key)
+    parent_docs = await cached_parent_docs(api_deps)
+    assert edited in parent_docs
+
+    file = Path(ingested.settings.corpus_dir) / "specs" / "api-limits.md"
+    file.write_text(file.read_text(encoding="utf-8") + "\nBursts are smoothed.\n", "utf-8")
+    await redis_.enqueue_job(ingested.redis, "upsert", "specs/api-limits.md")
+    while await consume_once(ingested, "test"):
+        pass
+    await run_invalidator(ingested)
+
+    assert await redis_.get_answer(api_deps.redis, key) is None
+    assert not await api_deps.redis.exists(f"doc2ans:{edited}")
+    assert not await point_exists(api_deps, key)
+    assert await cached_parent_docs(api_deps) == parent_docs - {edited}
+    assert done(await ask(client, "dev-ana", QUESTION))["cache_tier"] == "none"
+    assert done(first)["cache_tier"] == "none"
+
+
+async def test_abstentions_and_degraded_answers_are_not_cached(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for _ in range(2):
+        events = await ask(client, "dev-ana", "MAPLE-4")
+        assert done(events)["abstained"] and done(events)["cache_tier"] == "none"
+
+    def reranker_down(query: str, passages: list[str]) -> list[float]:
+        raise RuntimeError("reranker down")
+
+    monkeypatch.setattr(api_deps.reranker, "score", reranker_down)
+    for _ in range(2):
+        events = await ask(client, "dev-ana", QUESTION)
+        assert done(events)["degraded"] == ["rerank"] and done(events)["cache_tier"] == "none"
+    assert await api_deps.redis.keys("ans:*") == []
+    assert await api_deps.redis.keys("doc2ans:*") == []
+    assert await answer_points(api_deps) == 0
+
+
+async def test_expired_answer_behind_a_semantic_hit_is_a_miss_and_drops_the_point(
+    client: httpx.AsyncClient, api_deps: pipeline.Deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_deps.settings, "semantic_cache_threshold", 0.8)
+    await ask(client, "dev-ana", QUESTION)
+    key = await key_for(api_deps, "user:ana", QUESTION)
+    assert await point_exists(api_deps, key)
+    await api_deps.redis.delete(f"ans:{key}")
+    events = await ask(client, "dev-ana", REWORDED)
+    assert done(events)["cache_tier"] == "none"
+    assert not await point_exists(api_deps, key)

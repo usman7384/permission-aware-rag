@@ -1,3 +1,4 @@
+import json
 from typing import Literal
 
 from pydantic import BaseModel
@@ -20,8 +21,19 @@ def changed_node(change: TupleChanged) -> str:
     return change.object if change.relation == "viewer" else change.subject
 
 
-async def restamp(deps: Deps, node: str, event_id: str) -> None:
-    """Recompute the readers of every live document at or beneath `node` and overwrite them."""
+async def purge(deps: Deps, doc_ids: list[str], event_id: str) -> None:
+    """Delete the cached answers whose context used the documents, and their `chunk:` keys."""
+    if not doc_ids:
+        return
+    cache_keys = await redis_.purge_answers(deps.redis, doc_ids)
+    await qdrant_.delete_answers_of(deps.qdrant, deps.settings, doc_ids)
+    parents = await redis_.delete_parents_of(deps.redis, doc_ids)
+    log("caches_purged", job_id=event_id, doc_ids=doc_ids, answers=len(cache_keys), parents=parents)
+
+
+async def restamp(deps: Deps, node: str, event_id: str) -> list[str]:
+    """Recompute the readers of every live document at or beneath `node` and overwrite them;
+    returns the re-stamped documents."""
     async with deps.pg.connection() as conn:
         docs = await pg.select_live_documents_beneath(conn, node)
         for doc in docs:
@@ -29,17 +41,21 @@ async def restamp(deps: Deps, node: str, event_id: str) -> None:
             await qdrant_.set_principals(deps.qdrant, deps.settings, str(doc), principals)
             await opensearch_.set_principals(deps.opensearch, deps.settings, str(doc), principals)
     log("documents_restamped", job_id=event_id, node=node, documents=len(docs))
+    return [str(doc) for doc in docs]
 
 
 async def handle_change(deps: Deps, message: redis_.Message) -> None:
     """Act on one change event and acknowledge it; a failed event stays pending for reclaim."""
     event_id, fields = message
     try:
-        if fields["type"] == "tuple_changed":
+        if fields["type"] in ("doc_changed", "doc_deleted"):
+            await purge(deps, json.loads(fields["doc_ids"]), event_id)
+        elif fields["type"] == "tuple_changed":
             change = TupleChanged.model_validate(fields)
             if change.relation != "member":
                 async with deps.lock:
-                    await restamp(deps, changed_node(change), event_id)
+                    docs = await restamp(deps, changed_node(change), event_id)
+                await purge(deps, docs, event_id)
     except Exception as exc:
         log("change_failed", job_id=event_id, error=repr(exc))
         return
