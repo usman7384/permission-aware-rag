@@ -150,10 +150,10 @@ Tests:
 
 Spec: sections 11, 13, 10 (`/admin/faults`).
 
-- [ ] Stage timings recorded for all sixteen steps.
-- [ ] Fault wrappers and `POST /admin/faults`.
-- [ ] Extractive fallback.
-- [ ] `rag/evals/golden.jsonl` with the twelve fixture questions, `score.py`, `prompts/judge_v1.txt`, `make eval`.
+- [x] Stage timings recorded for all sixteen steps.
+- [x] Fault wrappers and `POST /admin/faults`.
+- [x] Extractive fallback.
+- [x] `rag/evals/golden.jsonl` with the twelve fixture questions, `score.py`, `prompts/judge_v1.txt`, `make eval`.
 
 Tests:
 

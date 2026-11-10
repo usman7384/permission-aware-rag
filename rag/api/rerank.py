@@ -2,9 +2,10 @@ import asyncio
 from dataclasses import replace
 
 from opensearchpy import AsyncOpenSearch
+from redis.asyncio import Redis
 
 from rag.api.retrieve import Candidate
-from rag.common import opensearch_
+from rag.common import faults, opensearch_
 from rag.common.config import Settings
 from rag.common.log import log
 from rag.common.models import Reranker
@@ -12,11 +13,13 @@ from rag.common.models import Reranker
 
 async def _scores(
     opensearch: AsyncOpenSearch,
+    redis: Redis,
     reranker: Reranker,
     settings: Settings,
     question: str,
     candidates: list[Candidate],
 ) -> list[float]:
+    await faults.inject(redis, "reranker", settings.fault_slow_ms)
     texts = await opensearch_.get_texts(opensearch, settings, [c.chunk_id for c in candidates])
     # A chunk missing here was removed by a re-index since retrieval; hydrate drops it.
     passages = [texts.get(c.chunk_id, "") for c in candidates]
@@ -25,6 +28,7 @@ async def _scores(
 
 async def rerank(
     opensearch: AsyncOpenSearch,
+    redis: Redis,
     reranker: Reranker,
     settings: Settings,
     question: str,
@@ -36,7 +40,7 @@ async def rerank(
         return [], True
     try:
         scores = await asyncio.wait_for(
-            _scores(opensearch, reranker, settings, question, candidates),
+            _scores(opensearch, redis, reranker, settings, question, candidates),
             settings.rerank_timeout_ms / 1000,
         )
     except Exception as exc:

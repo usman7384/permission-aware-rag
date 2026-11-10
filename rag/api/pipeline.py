@@ -13,16 +13,25 @@ from redis.asyncio import Redis
 
 from rag.api.auth import Caller
 from rag.api.cache import CachedAnswer, exact_cache, semantic_cache, write_caches
-from rag.api.generate import ABSTAIN_TEXT, Event, assemble, closing_events, generate, output_guard
+from rag.api.generate import (
+    ABSTAIN_TEXT,
+    Context,
+    Event,
+    assemble,
+    closing_events,
+    generate,
+    output_guard,
+)
 from rag.api.hydrate import ParentHit, hydrate
 from rag.api.rerank import rerank
 from rag.api.retrieve import RetrievalUnavailable, recheck, retrieve, rrf
 from rag.api.rewrite import rewrite
-from rag.common import pg
+from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
+from rag.common.faults import FaultyLLM
 from rag.common.keys import cache_key, fingerprint
 from rag.common.log import log
-from rag.common.models import LLM, Embedder, Reranker
+from rag.common.models import LLM, Embedder, Reranker, make_embedder, make_llm, make_reranker
 from rag.common.permissions import expand_principals
 
 
@@ -38,6 +47,28 @@ class Deps:
     llm: LLM
 
 
+async def open_deps(settings: Settings) -> Deps:
+    """Store clients and models; every LLM call goes through the `llm` fault wrapper."""
+    redis = redis_.connect(settings)
+    return Deps(
+        settings=settings,
+        pg=await pg.open_pool(settings),
+        redis=redis,
+        qdrant=qdrant_.connect(settings),
+        opensearch=opensearch_.connect(settings),
+        embedder=make_embedder(settings),
+        reranker=make_reranker(settings),
+        llm=FaultyLLM(make_llm(settings), redis, settings.fault_slow_ms),
+    )
+
+
+async def close_deps(deps: Deps) -> None:
+    await deps.pg.close()
+    await deps.redis.aclose()
+    await deps.qdrant.close()
+    await deps.opensearch.close()
+
+
 @dataclass
 class Outcome:
     cache_tier: str = "none"
@@ -46,6 +77,7 @@ class Outcome:
     doc_ids: list[str] = field(default_factory=list)
     abstained: bool = False
     degraded: list[str] = field(default_factory=list)
+    context: Context | None = None
 
     @property
     def cacheable(self) -> bool:
@@ -62,6 +94,22 @@ def timed(timings: dict[str, float], step: str) -> Iterator[None]:
         yield
     finally:
         timings[step] = round((time.perf_counter() - start) * 1000, 3)
+
+
+async def timed_pieces(
+    pieces: AsyncIterator[str], spent: dict[str, float], step: str
+) -> AsyncIterator[str]:
+    """Pass the pieces through, adding the milliseconds spent waiting for each to `spent[step]`."""
+    spent[step] = 0.0
+    while True:
+        start = time.perf_counter()
+        try:
+            piece = await anext(pieces)
+        except StopAsyncIteration:
+            return
+        finally:
+            spent[step] += (time.perf_counter() - start) * 1000
+        yield piece
 
 
 async def expand(conn: AsyncConnection, user: str) -> tuple[list[str], str]:
@@ -108,7 +156,7 @@ async def search(
     s = deps.settings
     with timed(timings, "retrieve"):
         branches, degraded = await retrieve(
-            deps.qdrant, deps.opensearch, s, question, vector, principals, request_id
+            deps.qdrant, deps.opensearch, deps.redis, s, question, vector, principals, request_id
         )
     with timed(timings, "rrf"):
         fused = rrf(branches, s.rrf_k, s.fused_keep)
@@ -117,7 +165,7 @@ async def search(
             allowed = await recheck(conn, fused, principals)
     with timed(timings, "rerank"):
         ranked, reranked = await rerank(
-            deps.opensearch, deps.reranker, s, question, allowed, request_id
+            deps.opensearch, deps.redis, deps.reranker, s, question, allowed, request_id
         )
     if not reranked:
         degraded.append("rerank")
@@ -143,15 +191,22 @@ async def answer(
         yield "token", {"text": ABSTAIN_TEXT}
         yield "citations", {"items": []}
         return
+    spent: dict[str, float] = {}
+    stream = generate(deps.llm, deps.settings, context, outcome.degraded, request_id)
+    llm_pieces = timed_pieces(stream, spent, "generate")
     pieces = []
-    with timed(timings, "generate"):
-        stream = generate(deps.llm, deps.settings, context, outcome.degraded, request_id)
-        async for piece in output_guard(stream, context.parents):
-            pieces.append(piece)
-            yield "token", {"text": piece}
+    async for piece in timed_pieces(output_guard(llm_pieces, context.parents), spent, "guard"):
+        pieces.append(piece)
+        yield "token", {"text": piece}
     outcome.answer = "".join(pieces)
+    outcome.context = context
     outcome.doc_ids = sorted({p.doc_id for p in context.parents})
-    for name, payload in closing_events(outcome.answer, context.parents):
+    with timed(spent, "closing"):
+        closing = closing_events(outcome.answer, context.parents)
+    timings["generate"] = round(spent["generate"], 3)
+    # Waiting on the guard includes waiting on the LLM; the difference is the guard's own work.
+    timings["output_guard"] = round(spent["guard"] - spent["generate"] + spent["closing"], 3)
+    for name, payload in closing:
         if name == "citations":
             outcome.citations = payload["items"]
         yield name, payload
@@ -175,24 +230,28 @@ async def persist(
     outcome: Outcome,
     timings: dict[str, float],
 ) -> None:
-    """Store the user and assistant turns and the request row in one transaction."""
-    async with pool.connection() as conn, conn.transaction():
-        await pg.insert_turn(conn, session_id, caller.user_id, "user", question)
-        await pg.insert_turn(conn, session_id, caller.user_id, "assistant", outcome.answer)
-        await pg.insert_request(
-            conn,
-            request_id,
-            caller.user_id,
-            session_id,
-            question,
-            rewritten,
-            outcome.cache_tier,
-            outcome.abstained,
-            outcome.degraded,
-            outcome.doc_ids,
-            timings,
-            outcome.answer,
-        )
+    """Store the user and assistant turns and the request row in one transaction, then add
+    the transaction's own duration to the row's timings."""
+    async with pool.connection() as conn:
+        with timed(timings, "persist"):
+            async with conn.transaction():
+                await pg.insert_turn(conn, session_id, caller.user_id, "user", question)
+                await pg.insert_turn(conn, session_id, caller.user_id, "assistant", outcome.answer)
+                await pg.insert_request(
+                    conn,
+                    request_id,
+                    caller.user_id,
+                    session_id,
+                    question,
+                    rewritten,
+                    outcome.cache_tier,
+                    outcome.abstained,
+                    outcome.degraded,
+                    outcome.doc_ids,
+                    timings,
+                    outcome.answer,
+                )
+        await pg.set_request_timings(conn, request_id, timings)
 
 
 async def store_in_caches(
@@ -254,10 +313,7 @@ async def ask(
         outcome.degraded += failed
         async for event in answer(deps, parents, query, request_id, timings, outcome):
             yield event
-    with timed(timings, "persist"):
-        await persist(
-            deps.pg, request_id, caller, session_id, question, rewritten, outcome, timings
-        )
+    await persist(deps.pg, request_id, caller, session_id, question, rewritten, outcome, timings)
     log(
         "ask_done",
         request_id=request_id,

@@ -1,0 +1,12 @@
+{"id": "api-limits", "user": "user:ana", "question": "How many requests per minute per key does the public API allow?", "expected_paths": ["specs/api-limits.md"]}
+{"id": "deploy-process", "user": "user:ana", "question": "On which days do production deploys happen?", "expected_paths": ["specs/deploy-process.md"]}
+{"id": "auth-design", "user": "user:ana", "question": "When do access tokens expire?", "expected_paths": ["specs/auth-design.md"]}
+{"id": "storage-layout", "user": "user:ana", "question": "In which bucket are uploaded files kept?", "expected_paths": ["specs/storage-layout.md"]}
+{"id": "leave-policy", "user": "user:ben", "question": "How many days of paid leave do employees receive per year?", "expected_paths": ["hr/leave-policy.md"]}
+{"id": "expenses", "user": "user:ben", "question": "Which expenses need manager approval?", "expected_paths": ["hr/expenses.md"]}
+{"id": "onboarding", "user": "user:ben", "question": "When do new hires get their laptop?", "expected_paths": ["hr/onboarding.md"]}
+{"id": "remote-work", "user": "user:ben", "question": "How many days a week may staff work remotely?", "expected_paths": ["hr/remote-work.md"]}
+{"id": "company-values", "user": "user:ana", "question": "What is the first company value?", "expected_paths": ["public/company-values.md"]}
+{"id": "office-hours", "user": "user:ben", "question": "When is the office open on weekdays?", "expected_paths": ["public/office-hours.md"]}
+{"id": "glossary", "user": "user:ana", "question": "What does RFC mean in the glossary?", "expected_paths": ["public/glossary.md"]}
+{"id": "holidays", "user": "user:ben", "question": "Between which dates does the office close for the winter closure?", "expected_paths": ["public/holidays.md"]}

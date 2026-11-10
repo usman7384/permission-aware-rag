@@ -1,4 +1,4 @@
-.PHONY: up down migrate seed api worker test test-int lint
+.PHONY: up down migrate seed api worker test test-int eval lint
 
 up:
 	docker compose up -d --wait
@@ -23,6 +23,9 @@ test:
 
 test-int:
 	uv run pytest -m integration
+
+eval:
+	uv run python -m rag.evals.score
 
 lint:
 	uv run ruff check .

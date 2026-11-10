@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     rate_limit_per_min: int = 60
     rate_limit_ttl_s: int = 120
     rewrite_max_tokens: int = 256
+    judge_max_tokens: int = 4
 
     retrieve_timeout_ms: int = 500
     rerank_timeout_ms: int = 2000

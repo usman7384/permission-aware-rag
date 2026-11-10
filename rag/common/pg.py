@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from psycopg import AsyncConnection
@@ -274,6 +275,14 @@ async def insert_request(
     )
 
 
+async def set_request_timings(
+    conn: AsyncConnection, request_id: str, timings: dict[str, float]
+) -> None:
+    await conn.execute(
+        "UPDATE requests SET timings = %s WHERE request_id = %s", (Jsonb(timings), request_id)
+    )
+
+
 async def insert_feedback(
     conn: AsyncConnection, request_id: str, user_id: str, rating: int, comment: str | None
 ) -> bool:
@@ -284,3 +293,13 @@ async def insert_feedback(
         (rating, comment, request_id, user_id),
     )
     return cur.rowcount == 1
+
+
+async def insert_eval_run(
+    conn: AsyncConnection, run_id: str, name: str, config: dict[str, Any], metrics: dict[str, Any]
+) -> None:
+    await conn.execute(
+        "INSERT INTO eval_runs (run_id, name, config, metrics) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (run_id) DO NOTHING",
+        (run_id, name, Jsonb(config), Jsonb(metrics)),
+    )

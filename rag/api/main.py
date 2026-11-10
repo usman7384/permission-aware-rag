@@ -14,34 +14,20 @@ from pydantic import BaseModel
 from rag.api.auth import ApiError, authenticate
 from rag.api.generate import Event
 from rag.api.guard import input_guard
-from rag.api.pipeline import Deps, ask, expand, timed
+from rag.api.pipeline import Deps, ask, close_deps, expand, open_deps, timed
 from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.log import log
-from rag.common.models import make_embedder, make_llm, make_reranker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = Settings()
-    deps = Deps(
-        settings=settings,
-        pg=await pg.open_pool(settings),
-        redis=redis_.connect(settings),
-        qdrant=qdrant_.connect(settings),
-        opensearch=opensearch_.connect(settings),
-        embedder=make_embedder(settings),
-        reranker=make_reranker(settings),
-        llm=make_llm(settings),
-    )
+    deps = await open_deps(Settings())
     app.state.deps = deps
     try:
         yield
     finally:
-        await deps.pg.close()
-        await deps.redis.aclose()
-        await deps.qdrant.close()
-        await deps.opensearch.close()
+        await close_deps(deps)
 
 
 app = FastAPI(title="rag-laptop", lifespan=lifespan)
@@ -176,4 +162,26 @@ async def admin_tuples(
         await write(conn, body.subject, body.relation, body.object)
     await redis_.emit_tuple_change(deps.redis, body.subject, body.relation, body.object)
     log("tuple_changed", request_id=request_id, user_id=caller.user_id, **body.model_dump())
+    return Response(status_code=204)
+
+
+class FaultChange(BaseModel):
+    component: Literal["dense", "sparse", "reranker", "llm"]
+    mode: Literal["ok", "slow", "down"]
+
+
+@app.post("/admin/faults", status_code=204)
+async def admin_faults(
+    body: FaultChange,
+    request: Request,
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Set or clear the injected fault of one component."""
+    deps: Deps = request.app.state.deps
+    async with deps.pg.connection() as conn:
+        caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)
+    if not caller.is_admin:
+        raise ApiError(401, "unauthorized", "an admin API key is required")
+    await redis_.set_fault(deps.redis, body.component, body.mode)
+    log("fault_set", request_id=str(uuid.uuid4()), user_id=caller.user_id, **body.model_dump())
     return Response(status_code=204)

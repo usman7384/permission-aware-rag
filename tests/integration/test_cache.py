@@ -150,16 +150,12 @@ async def test_editing_a_context_document_evicts_its_cached_answer(
 
 
 async def test_abstentions_and_degraded_answers_are_not_cached(
-    client: httpx.AsyncClient, api_deps: pipeline.Deps, monkeypatch: pytest.MonkeyPatch
+    client: httpx.AsyncClient, api_deps: pipeline.Deps
 ) -> None:
     for _ in range(2):
         events = await ask(client, "dev-ana", "MAPLE-4")
         assert done(events)["abstained"] and done(events)["cache_tier"] == "none"
-
-    def reranker_down(query: str, passages: list[str]) -> list[float]:
-        raise RuntimeError("reranker down")
-
-    monkeypatch.setattr(api_deps.reranker, "score", reranker_down)
+    await redis_.set_fault(api_deps.redis, "reranker", "down")
     for _ in range(2):
         events = await ask(client, "dev-ana", QUESTION)
         assert done(events)["degraded"] == ["rerank"] and done(events)["cache_tier"] == "none"

@@ -15,6 +15,7 @@ from rag.common.keys import (
     answer_key,
     chunk_key,
     doc_answers_key,
+    fault_key,
     rate_limit_key,
 )
 
@@ -164,3 +165,15 @@ async def delete_parents_of(client: Redis, doc_ids: list[str]) -> int:
     if stale:
         await client.delete(*stale)
     return len(stale)
+
+
+async def get_fault(client: Redis, component: str) -> str | None:
+    return await client.get(fault_key(component))
+
+
+async def set_fault(client: Redis, component: str, mode: str) -> None:
+    """Store `slow` or `down` for the component; `ok` deletes the key."""
+    if mode == "ok":
+        await client.delete(fault_key(component))
+    else:
+        await client.set(fault_key(component), mode)

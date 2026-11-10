@@ -60,7 +60,9 @@ async def _reset_stores(settings: Settings) -> None:
     """Empty the test stores and reload the fixture tuples and keys."""
     assert settings.store_prefix == "test_" and settings.redis_url.endswith("/15")
     async with await AsyncConnection.connect(settings.pg_dsn) as conn:
-        await conn.execute("TRUNCATE documents, tuples, api_keys, turns, requests CASCADE")
+        await conn.execute(
+            "TRUNCATE documents, tuples, api_keys, turns, requests, eval_runs CASCADE"
+        )
         await seed(conn)
     qdrant = qdrant_.connect(settings)
     opensearch = opensearch_.connect(settings)

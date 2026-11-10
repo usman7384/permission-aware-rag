@@ -6,8 +6,9 @@ from typing import Any
 from opensearchpy import AsyncOpenSearch
 from psycopg import AsyncConnection
 from qdrant_client import AsyncQdrantClient
+from redis.asyncio import Redis
 
-from rag.common import opensearch_, pg, qdrant_
+from rag.common import faults, opensearch_, pg, qdrant_
 from rag.common.config import Settings
 from rag.common.log import log
 from rag.common.permissions import readable_docs
@@ -36,8 +37,13 @@ def _candidate(payload: dict[str, Any]) -> Candidate:
 
 
 async def dense(
-    client: AsyncQdrantClient, settings: Settings, vector: list[float], principals: list[str]
+    client: AsyncQdrantClient,
+    redis: Redis,
+    settings: Settings,
+    vector: list[float],
+    principals: list[str],
 ) -> list[Candidate]:
+    await faults.inject(redis, "dense", settings.fault_slow_ms)
     payloads = await qdrant_.search_chunks(
         client, settings, vector, principals, settings.dense_top_k
     )
@@ -45,8 +51,9 @@ async def dense(
 
 
 async def sparse(
-    client: AsyncOpenSearch, settings: Settings, question: str, principals: list[str]
+    client: AsyncOpenSearch, redis: Redis, settings: Settings, question: str, principals: list[str]
 ) -> list[Candidate]:
+    await faults.inject(redis, "sparse", settings.fault_slow_ms)
     payloads = await opensearch_.search_chunks(
         client, settings, question, principals, settings.sparse_top_k
     )
@@ -67,6 +74,7 @@ async def _branch(
 async def retrieve(
     qdrant: AsyncQdrantClient,
     opensearch: AsyncOpenSearch,
+    redis: Redis,
     settings: Settings,
     question: str,
     vector: list[float],
@@ -75,11 +83,11 @@ async def retrieve(
 ) -> tuple[list[list[Candidate]], list[str]]:
     """Run both branches concurrently; returns the lists that succeeded and the failed names."""
     timeout_s = settings.retrieve_timeout_ms / 1000
+    dense_call = dense(qdrant, redis, settings, vector, principals)
+    sparse_call = sparse(opensearch, redis, settings, question, principals)
     results = await asyncio.gather(
-        _branch("dense", dense(qdrant, settings, vector, principals), timeout_s, request_id),
-        _branch(
-            "sparse", sparse(opensearch, settings, question, principals), timeout_s, request_id
-        ),
+        _branch("dense", dense_call, timeout_s, request_id),
+        _branch("sparse", sparse_call, timeout_s, request_id),
     )
     failed = [name for name, r in zip(("dense", "sparse"), results, strict=True) if r is None]
     if len(failed) == len(results):
