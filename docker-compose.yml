@@ -68,8 +68,54 @@ services:
       timeout: 3s
       retries: 30
 
+  api:
+    profiles: ["app"]
+    build: .
+    image: rag-laptop:0.1.0
+    command: ["uvicorn", "rag.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - path: .env
+        required: false
+    environment: &app-stores
+      CORPUS_DIR: /app/corpus
+      PG_DSN: postgresql://rag:rag@postgres:5432/rag
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      OPENSEARCH_URL: http://opensearch:9200
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-cache:/root/.cache/huggingface
+    depends_on: &app-depends
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      opensearch:
+        condition: service_healthy
+
+  worker:
+    profiles: ["app"]
+    build: .
+    image: rag-laptop:0.1.0
+    command: ["python", "-m", "rag.worker.main"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-stores
+      # File events from a host bind mount do not reach the container on every platform.
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./corpus:/app/corpus
+      - model-cache:/root/.cache/huggingface
+    depends_on: *app-depends
+
 volumes:
   pg-data:
   redis-data:
   qdrant-data:
   opensearch-data:
+  model-cache:

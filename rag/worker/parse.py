@@ -1,6 +1,12 @@
+import io
 import re
 from collections.abc import Callable
-from typing import NamedTuple
+from functools import cache
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from docling.document_converter import DocumentConverter
 
 _HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _FENCE = ("```", "~~~")
@@ -43,8 +49,31 @@ def _markdown_sections(text: str) -> list[Section]:
     return sections
 
 
+@cache
+def _pdf_converter() -> "DocumentConverter":
+    """Docling's converter, built once per process because it loads layout and table models."""
+    # Imported here so Markdown-only work never loads docling and its models.
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    options = PdfPipelineOptions(do_ocr=False)
+    return DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+    )
+
+
+def pdf_to_markdown(name: str, data: bytes) -> str:
+    from docling.datamodel.base_models import DocumentStream
+
+    stream = DocumentStream(name=PurePosixPath(name).name, stream=io.BytesIO(data))
+    return _pdf_converter().convert(stream).document.export_to_markdown()
+
+
 def parse(name: str, data: bytes) -> list[Section]:
-    """Sections of a file; their texts concatenate back to the file, minus blank preambles."""
+    """Sections of a file; Markdown and text sections concatenate back to the file text."""
+    if name.endswith(".pdf"):
+        return _markdown_sections(pdf_to_markdown(name, data))
     text = data.decode("utf-8")
     if name.endswith(".md"):
         return _markdown_sections(text)

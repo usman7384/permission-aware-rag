@@ -8,12 +8,14 @@ from pydantic import BaseModel
 
 from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
+from rag.common.faults import FaultyLLM
 from rag.common.ids import doc_id
 from rag.common.keys import CHANGES_GROUP, CHANGES_STREAM, JOBS_GROUP, JOBS_STREAM
 from rag.common.log import log
-from rag.common.models import make_embedder
+from rag.common.models import make_embedder, make_llm
 from rag.worker import invalidate
 from rag.worker.chunk import chunk
+from rag.worker.contextualize import contextualize
 from rag.worker.index import Deps, cleanup, commit, emit, hash_file, index_new, stamp
 from rag.worker.parse import parse
 from rag.worker.watch import reconcile, watch
@@ -38,13 +40,18 @@ async def upsert(deps: Deps, path: str, job_id: str) -> None:
     if row is not None and row[0] == content_hash and not row[2]:
         log("upsert_skipped", job_id=job_id, path=path, reason="unchanged")
         return
-    s = deps.settings
-    parents = chunk(parse(path, data), s.parent_tokens, s.child_tokens, deps.embedder.count_tokens)
+    s, count = deps.settings, deps.embedder.count_tokens
+    sections = await asyncio.to_thread(parse, path, data)
+    parents = chunk(sections, s.parent_tokens, s.child_tokens, count)
+    contexts: list[str | None] = [None] * len(parents)
+    if s.contextual_chunking:
+        document = "".join(section.text for section in sections)
+        contexts = list(await contextualize(deps.llm, s, document, parents, count))
     async with deps.pg.connection() as conn:
         principals = await stamp(conn, path, doc)
     version = row[1] + 1 if row else 1
-    chunks = await index_new(deps, doc, version, parents, principals)
-    await commit(deps, doc, path, content_hash, version, parents)
+    chunks = await index_new(deps, doc, version, parents, contexts, principals)
+    await commit(deps, doc, path, content_hash, version, parents, contexts)
     await cleanup(deps, doc, version)
     await emit(deps, "doc_changed", doc)
     log("document_indexed", job_id=job_id, path=path, version=version, chunks=chunks)
@@ -117,13 +124,15 @@ async def reclaim_loop(deps: Deps, consumer: str, reclaim: Step) -> None:
 
 
 async def open_deps(settings: Settings) -> Deps:
+    redis = redis_.connect(settings)
     return Deps(
         settings=settings,
         pg=await pg.open_pool(settings),
-        redis=redis_.connect(settings),
+        redis=redis,
         qdrant=qdrant_.connect(settings),
         opensearch=opensearch_.connect(settings),
         embedder=make_embedder(settings),
+        llm=FaultyLLM(make_llm(settings), redis, settings.fault_slow_ms),
     )
 
 

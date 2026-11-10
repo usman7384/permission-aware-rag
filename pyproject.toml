@@ -15,10 +15,23 @@ dependencies = [
     "httpx",
     "sentence-transformers",
     "watchfiles",
+    "docling",
+    "torch",
+    "torchvision",
 ]
 
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio", "ruff"]
+
+# Linux (the Docker images) takes CPU-only torch wheels instead of the CUDA build.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
@@ -35,6 +48,8 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 filterwarnings = [
     "ignore:enable_cleanup_closed ignored:DeprecationWarning:aiohttp",
+    "ignore:`force_full_page_ocr` is deprecated:DeprecationWarning",
+    "ignore:This field is deprecated:DeprecationWarning:docling",
 ]
 markers = [
     "unit: no network, no services, no model downloads",

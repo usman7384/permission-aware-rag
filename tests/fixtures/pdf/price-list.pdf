@@ -1,0 +1,56 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 784 >>
+stream
+BT /F2 20 Tf 72 740 Td (Support Price List) Tj ET
+BT /F1 11 Tf 72 700 Td (This price list sets the yearly fee for each support plan.) Tj ET
+BT /F1 11 Tf 72 684 Td (Every plan includes email support during office hours.) Tj ET
+0.5 w
+72 640 m 552 640 l S
+72 616 m 552 616 l S
+72 592 m 552 592 l S
+72 568 m 552 568 l S
+72 640 m 72 568 l S
+192 640 m 192 568 l S
+312 640 m 312 568 l S
+552 640 m 552 568 l S
+BT /F2 11 Tf 78 624 Td (Plan) Tj ET
+BT /F2 11 Tf 198 624 Td (Yearly fee) Tj ET
+BT /F2 11 Tf 318 624 Td (Response time) Tj ET
+BT /F1 11 Tf 78 600 Td (Basic) Tj ET
+BT /F1 11 Tf 198 600 Td (900 euros) Tj ET
+BT /F1 11 Tf 318 600 Td (48 hours) Tj ET
+BT /F1 11 Tf 78 576 Td (Premium) Tj ET
+BT /F1 11 Tf 198 576 Td (2400 euros) Tj ET
+BT /F1 11 Tf 318 576 Td (4 hours, code QUARTZ-5) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000001085 00000 n 
+0000001182 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1284
+%%EOF

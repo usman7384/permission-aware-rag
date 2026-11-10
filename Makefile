@@ -1,4 +1,4 @@
-.PHONY: up down migrate seed api worker test test-int eval lint
+.PHONY: up down migrate seed api worker test test-int test-int-context eval lint
 
 up:
 	docker compose up -d --wait
@@ -22,6 +22,10 @@ test:
 	uv run pytest -m unit
 
 test-int:
+	uv run pytest -m integration
+
+test-int-context: export CONTEXTUAL_CHUNKING = true
+test-int-context:
 	uv run pytest -m integration
 
 eval:

@@ -13,7 +13,7 @@ from redis.asyncio import Redis
 from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.ids import chunk_id, parent_id
-from rag.common.models import Embedder
+from rag.common.models import LLM, Embedder
 from rag.common.permissions import document_readers, folder_of, parent_tuples
 from rag.worker.chunk import Parent
 
@@ -26,6 +26,7 @@ class Deps:
     qdrant: AsyncQdrantClient
     opensearch: AsyncOpenSearch
     embedder: Embedder
+    llm: LLM
     # Jobs run one at a time so two versions of a document are never written at once.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -42,10 +43,14 @@ async def stamp(conn: AsyncConnection, path: str, doc: UUID) -> list[str]:
 
 
 def _chunk_payloads(
-    doc: UUID, version: int, parents: list[Parent], principals: list[str]
+    doc: UUID,
+    version: int,
+    parents: list[Parent],
+    contexts: list[str | None],
+    principals: list[str],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     payloads, texts = [], []
-    for p, parent in enumerate(parents):
+    for p, (parent, context) in enumerate(zip(parents, contexts, strict=True)):
         for c, child in enumerate(parent.children):
             payloads.append(
                 {
@@ -56,16 +61,21 @@ def _chunk_payloads(
                     "principals": principals,
                 }
             )
-            texts.append(child)
+            texts.append(child if context is None else f"{context}\n{child}")
     return payloads, texts
 
 
 async def index_new(
-    deps: Deps, doc: UUID, version: int, parents: list[Parent], principals: list[str]
+    deps: Deps,
+    doc: UUID,
+    version: int,
+    parents: list[Parent],
+    contexts: list[str | None],
+    principals: list[str],
 ) -> int:
     """Embed the children and write them to Qdrant and OpenSearch; returns the chunk count."""
     s = deps.settings
-    payloads, texts = _chunk_payloads(doc, version, parents, principals)
+    payloads, texts = _chunk_payloads(doc, version, parents, contexts, principals)
     # Chunks left by an earlier failed attempt at this version must not survive the commit.
     await qdrant_.delete_chunks(deps.qdrant, s, str(doc), gte=version)
     await opensearch_.delete_chunks(deps.opensearch, s, str(doc), gte=version)
@@ -77,11 +87,17 @@ async def index_new(
 
 
 async def commit(
-    deps: Deps, doc: UUID, path: str, content_hash: str, version: int, parents: list[Parent]
+    deps: Deps,
+    doc: UUID,
+    path: str,
+    content_hash: str,
+    version: int,
+    parents: list[Parent],
+    contexts: list[str | None],
 ) -> None:
     rows = [
-        (parent_id(doc, version, p), doc, version, p, parent.heading, parent.text)
-        for p, parent in enumerate(parents)
+        (parent_id(doc, version, p), doc, version, p, parent.heading, context, parent.text)
+        for p, (parent, context) in enumerate(zip(parents, contexts, strict=True))
     ]
     async with deps.pg.connection() as conn, conn.transaction():
         await pg.upsert_document(conn, doc, path, folder_of(path), content_hash, version)

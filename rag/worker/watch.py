@@ -8,7 +8,7 @@ from rag.common import pg, redis_
 from rag.common.config import Settings
 from rag.common.log import log
 
-WATCHED_SUFFIXES = (".md", ".txt")
+WATCHED_SUFFIXES = (".md", ".txt", ".pdf")
 
 
 def corpus_files(root: Path) -> list[str]:

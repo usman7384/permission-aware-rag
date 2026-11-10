@@ -82,13 +82,13 @@ async def upsert_document(
 
 
 async def insert_parents(
-    conn: AsyncConnection, rows: list[tuple[UUID, UUID, int, int, str | None, str]]
+    conn: AsyncConnection, rows: list[tuple[UUID, UUID, int, int, str | None, str | None, str]]
 ) -> None:
-    """Rows are (parent_id, doc_id, version, ordinal, heading, text)."""
+    """Rows are (parent_id, doc_id, version, ordinal, heading, context, text)."""
     async with conn.cursor() as cur:
         await cur.executemany(
-            "INSERT INTO parents (parent_id, doc_id, version, ordinal, heading, text) "
-            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (parent_id) DO NOTHING",
+            "INSERT INTO parents (parent_id, doc_id, version, ordinal, heading, context, text) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (parent_id) DO NOTHING",
             rows,
         )
 

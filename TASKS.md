@@ -168,10 +168,10 @@ Covers success checks 7 and 8.
 
 Spec: sections 9.2 (steps 2 and 4), 2.
 
-- [ ] PDF parsing behind the same `parse` function; `.pdf` added to the watcher.
-- [ ] `prompts/context_v1.txt` and `contextualize`, switched by `CONTEXTUAL_CHUNKING`.
-- [ ] Dockerfiles for the API and the worker, added to `docker-compose.yml` under a profile so that `make up` still starts only the stores.
-- [ ] `README.md`: what it is, the architecture in a few lines, prerequisites, how to run from a fresh clone, how to run tests and the evaluation, pinned image tags, and an empty results table for the owner's measured numbers.
+- [x] PDF parsing behind the same `parse` function; `.pdf` added to the watcher.
+- [x] `prompts/context_v1.txt` and `contextualize`, switched by `CONTEXTUAL_CHUNKING`.
+- [x] Dockerfiles for the API and the worker, added to `docker-compose.yml` under a profile so that `make up` still starts only the stores.
+- [x] `README.md`: what it is, the architecture in a few lines, prerequisites, how to run from a fresh clone, how to run tests and the evaluation, pinned image tags, and an empty results table for the owner's measured numbers.
 
 Tests:
 

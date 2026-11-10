@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     rate_limit_ttl_s: int = 120
     rewrite_max_tokens: int = 256
     judge_max_tokens: int = 4
+    context_doc_tokens: int = 2000
+    context_max_tokens: int = 128
 
     retrieve_timeout_ms: int = 500
     rerank_timeout_ms: int = 2000
