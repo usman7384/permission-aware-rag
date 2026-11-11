@@ -283,6 +283,17 @@ async def set_request_timings(
     )
 
 
+async def select_request_timings(
+    conn: AsyncConnection, session_prefix: str
+) -> list[tuple[str, dict[str, float]]]:
+    """Cache tier and timings of the requests whose session ID starts with the prefix."""
+    cur = await conn.execute(
+        "SELECT cache_tier, timings FROM requests WHERE starts_with(session_id, %s)",
+        (session_prefix,),
+    )
+    return await cur.fetchall()
+
+
 async def insert_feedback(
     conn: AsyncConnection, request_id: str, user_id: str, rating: int, comment: str | None
 ) -> bool:

@@ -1,33 +1,9 @@
 import argparse
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
 
 from rag.common.config import Settings
-from rag.common.models import LLM, make_embedder, make_llm
+from rag.common.models import make_embedder, make_llm
 from rag.evals.benchmark import read_corpus, read_qrels
 from rag.evals.experiments import common
-from rag.worker.chunk import Counter
-
-
-@dataclass
-class CountingLLM:
-    """An LLM that counts its calls and their prompt and completion tokens."""
-
-    llm: LLM
-    count: Counter
-    calls: int = 0
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-
-    async def complete(self, system: str, user: str, *, model: str, max_tokens: int) -> str:
-        reply = await self.llm.complete(system, user, model=model, max_tokens=max_tokens)
-        self.calls += 1
-        self.prompt_tokens += self.count(system) + self.count(user)
-        self.completion_tokens += self.count(reply)
-        return reply
-
-    def stream(self, system: str, user: str, *, model: str, max_tokens: int) -> AsyncIterator[str]:
-        return self.llm.stream(system, user, model=model, max_tokens=max_tokens)
 
 
 async def experiment(settings: Settings, args: argparse.Namespace) -> str:
@@ -39,7 +15,8 @@ async def experiment(settings: Settings, args: argparse.Namespace) -> str:
     for contextual in (False, True):
         arm = "context" if contextual else "plain"
         s = common.variant_settings(settings, arm, contextual_chunking=contextual)
-        llm = CountingLLM(common.fake_llm_unless_configured(settings) or make_llm(settings), count)
+        inner = common.fake_llm_unless_configured(settings) or make_llm(settings)
+        llm = common.CountingLLM(inner, count)
         stats = await common.build_variant(settings, s, docs, args.user, llm)
         m = await common.evaluate_variant(s, args, docs, with_answers=False)
         await common.drop_variant(settings, s)

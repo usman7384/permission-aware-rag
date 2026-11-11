@@ -23,6 +23,11 @@ async def exact_cache(redis: Redis, cache_key: str) -> CachedAnswer | None:
     return CachedAnswer(**value) if value else None
 
 
+def semantic_match(similarity: float, entities: list[str], question: str, threshold: float) -> bool:
+    """Step 7's rule: similar enough, and the same entities as the cached question."""
+    return similarity >= threshold and entities == extract_entities(question)
+
+
 async def semantic_cache(
     redis: Redis,
     qdrant: AsyncQdrantClient,
@@ -38,9 +43,9 @@ async def semantic_cache(
     if nearest is None:
         return None
     point_id, similarity, payload = nearest
-    if similarity < settings.semantic_cache_threshold:
-        return None
-    if payload["entities"] != extract_entities(question):
+    if not semantic_match(
+        similarity, payload["entities"], question, settings.semantic_cache_threshold
+    ):
         return None
     cached = await exact_cache(redis, payload["cache_key"])
     if cached is None:

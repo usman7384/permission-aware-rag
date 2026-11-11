@@ -1,12 +1,31 @@
+import asyncio
+import random
+import time
+from collections import Counter, defaultdict
+
+import pytest
+
+from rag.api.pipeline import Outcome
 from rag.common.config import Settings
 from rag.common.models import FakeLLM
 from rag.common.text import tokens
 from rag.evals.benchmark import BenchDoc
 from rag.evals.experiments.ablation import variant_ms
-from rag.evals.experiments.common import overlap, sample_corpus, table, variant_settings
-from rag.evals.experiments.contextual_chunking import CountingLLM
+from rag.evals.experiments.cache_behaviour import Logged, negated, paraphrases, query_log, replay
+from rag.evals.experiments.common import (
+    CountingLLM,
+    overlap,
+    sample_corpus,
+    table,
+    variant_settings,
+)
+from rag.evals.experiments.cost import Prices, Tokens, usd_per_1k
+from rag.evals.experiments.failure_injection import Trial, answer_kind, summarize
 from rag.evals.experiments.filtered_search import readable_groups, with_folder_principals
+from rag.evals.experiments.freshness import scratch_redis, seconds_until
+from rag.evals.experiments.loadtest import locust_summary, stage_percentiles
 from rag.evals.experiments.scale_memory import ram_mb
+from rag.evals.score import Golden
 from rag.evals.synthetic import synthetic_acl
 
 
@@ -67,3 +86,111 @@ async def test_counting_llm_counts_calls_and_tokens() -> None:
     reply = await llm.complete("KIND: context", "one two", model="", max_tokens=8)
     assert reply == "This chunk is from the document."
     assert (llm.calls, llm.prompt_tokens, llm.completion_tokens) == (1, 4, 6)
+
+
+def test_paraphrases_keep_the_meaning_and_the_negation_flips_it() -> None:
+    assert paraphrases("Alpha beta gamma.") == [
+        "Alpha beta gamma.",
+        "alpha beta gamma",
+        "Is it true that alpha beta gamma?",
+        "Tell me whether alpha beta gamma.",
+    ]
+    assert negated("Alpha beta gamma.") == "It is false that alpha beta gamma."
+
+
+def test_query_log_is_skewed_towards_the_first_intents_and_repeatable() -> None:
+    texts = [f"Claim {i}." for i in range(20)]
+    log = query_log(texts, 2000, 1.0, 0.1, random.Random(1))
+    assert log == query_log(texts, 2000, 1.0, 0.1, random.Random(1))
+    counts = Counter(q.intent for q in log)
+    assert counts[0] > counts[1] > counts[19] and counts[0] > counts[20]
+    assert {q.text for q in log if q.intent == 20} == {"It is false that claim 0."}
+
+
+def test_replay_counts_exact_semantic_false_hits_and_missed_reuse() -> None:
+    first, asked, negation = "Alpha beta", "Is it true that alpha beta?", "It is false that alpha"
+    log = [Logged(first, 0), Logged("alpha beta.", 0), Logged(asked, 0), Logged(negation, 1)]
+    similarity = defaultdict(lambda: 0.5, {(first, asked): 0.97, (first, negation): 0.98})
+    assert replay(log, similarity, 0.95) == {
+        "hit_rate": 0.75,
+        "exact": 0.25,
+        "semantic": 0.5,
+        "false_hits": 0.25,
+        "missed_reuse": 0.0,
+    }
+    strict = replay(log, similarity, 0.99)
+    assert strict["hit_rate"] == strict["exact"] == strict["missed_reuse"] == 0.25
+    assert strict["false_hits"] == 0.0
+
+
+def test_cost_by_stage_with_prompt_and_answer_caches() -> None:
+    prices = Prices(3.0, 0.3, 15.0, 1.0, 5.0, min_cached_tokens=1024)
+    tokens = Tokens(100, 20, answer_in=2000, answer_system=1500, answer_out=100)
+    assert usd_per_1k(tokens, prices, 0.5, 0.0, False) == {
+        "rewrite": 0.1,
+        "answer": 7.5,
+        "total": 7.6,
+    }
+    assert usd_per_1k(tokens, prices, 0.5, 0.0, True)["answer"] == pytest.approx(3.45)
+    assert usd_per_1k(tokens, prices, 0.5, 0.5, False)["answer"] == 3.75
+    short = Tokens(100, 20, 2000, 150, 100)
+    assert usd_per_1k(short, prices, 0.5, 0.0, True) == usd_per_1k(short, prices, 0.5, 0.0, False)
+
+
+def test_answer_kind_and_fault_summary() -> None:
+    assert answer_kind(Outcome(abstained=True)) == "abstained"
+    assert answer_kind(Outcome(degraded=["llm"])) == "extractive"
+    assert answer_kind(Outcome(degraded=["rerank"])) == "llm"
+    questions = [Golden("1", "u", "q", ["a"]), Golden("2", "u", "q", ["c"])]
+    trials = [Trial(["a", "b"], [], "llm", 10.0), Trial([], ["dense", "sparse"], "error", 30.0)]
+    summary = summarize(questions, trials)
+    assert summary["recall@10"] == 0.5 and summary["ndcg@10"] == 0.5
+    assert (summary["p50_ms"], summary["p95_ms"]) == (10.0, 30.0)
+    assert (summary["llm"], summary["error"], summary["extractive"]) == (0.5, 0.5, 0.0)
+    assert summary["degraded"] == "dense,sparse"
+
+
+async def test_seconds_until_polls_until_the_check_passes() -> None:
+    calls = []
+
+    async def third_time() -> bool:
+        calls.append(1)
+        return len(calls) == 3
+
+    assert await seconds_until(third_time, time.perf_counter(), 1.0, 0.001) < 1.0
+    assert len(calls) == 3
+    with pytest.raises(TimeoutError):
+        await seconds_until(lambda: asyncio.sleep(0, False), time.perf_counter(), 0.01, 0.001)
+
+
+def test_scratch_redis_changes_the_database_and_refuses_the_configured_one() -> None:
+    assert scratch_redis("redis://127.0.0.1:6380/0", 1) == "redis://127.0.0.1:6380/1"
+    with pytest.raises(ValueError, match="scratch"):
+        scratch_redis("redis://127.0.0.1:6380/0", 0)
+    with pytest.raises(ValueError, match="scratch"):
+        scratch_redis("redis://127.0.0.1:6380", 0)
+
+
+def test_stage_percentiles_skip_requests_without_the_stage() -> None:
+    full = {"embed": 1.0, "retrieve": 2.0, "rrf": 0.0, "recheck": 1.0, "rerank": 10.0}
+    full |= {"hydrate": 1.0, "generate": 5.0, "output_guard": 1.0, "persist": 2.0}
+    hit = {"exact_cache": 1.0, "persist": 4.0}
+    stages = stage_percentiles([full, hit])
+    assert stages["retrieval"] == {"n": 1, "p50": 15.0, "p95": 15.0, "p99": 15.0}
+    assert stages["generation"]["p50"] == 6.0 and stages["persist"]["n"] == 2
+
+
+def test_locust_summary_reads_the_ask_row() -> None:
+    stats = (
+        '"Type","Name","Request Count","Failure Count","50%","95%","99%","Requests/s"\n'
+        '"POST","ask","12","1","350","900","1200","2.5"\n'
+        '"","Aggregated","12","1","350","900","1200","2.5"\n'
+    )
+    assert locust_summary(stats) == {
+        "n": 12,
+        "failures": 1,
+        "p50": 350.0,
+        "p95": 900.0,
+        "p99": 1200.0,
+        "rps": 2.5,
+    }

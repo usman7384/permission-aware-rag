@@ -201,13 +201,13 @@ One checkbox per script. The question in brackets is what the result must let th
 - [x] `ablation.py`: nDCG@10 and recall@100 for sparse only, dense only, hybrid, hybrid plus rerank. [Why hybrid? Why rerank?]
 - [x] `scale_memory.py`: memory, build time, p95 latency and recall at two corpus sizes for float32, int8 and binary quantization. [How does this scale?]
 - [x] `filtered_search.py`: recall and latency as filter selectivity goes from 50% to 0.1%, with and without an exact-scan fallback. [What if a user can see very little?]
-- [ ] `loadtest.py`: p50, p95, p99 and throughput per stage at rising concurrency, retrieval measured separately from generation. [Where does it break first?]
-- [ ] `cache_behaviour.py`: hit rate and false-hit rate of the semantic cache across thresholds on a skewed query log. [Why this threshold?]
-- [ ] `freshness.py`: seconds from file change to searchable and to cache eviction. [How fresh is the index?]
-- [ ] `failure_injection.py`: answer quality and latency under each fault. [What happens when a dependency is down?]
+- [x] `loadtest.py`: p50, p95, p99 and throughput per stage at rising concurrency, retrieval measured separately from generation. [Where does it break first?]
+- [x] `cache_behaviour.py`: hit rate and false-hit rate of the semantic cache across thresholds on a skewed query log. [Why this threshold?]
+- [x] `freshness.py`: seconds from file change to searchable and to cache eviction. [How fresh is the index?]
+- [x] `failure_injection.py`: answer quality and latency under each fault. [What happens when a dependency is down?]
 - [x] `model_migration.py`: build a second index under a new `INDEX_VERSION`, compare on the labels, switch with no failed requests. [How do you upgrade the embedding model?]
 - [x] `chunk_size.py`: recall and faithfulness for 64, 128 and 256-token children, with and without parents. [Why these chunk sizes?]
 - [x] `contextual_chunking.py`: recall with and without chunk context on a sample, and the indexing cost added. [Is the cost worth it?]
-- [ ] `cost.py`: tokens and cost per query by stage, and the effect of the caches, prompt caching and top-k. [How do you cut cost?]
+- [x] `cost.py`: tokens and cost per query by stage, and the effect of the caches, prompt caching and top-k. [How do you cut cost?]
 
 Owner action: write the results table and the design document from these runs.

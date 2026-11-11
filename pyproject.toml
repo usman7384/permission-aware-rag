@@ -21,7 +21,12 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff"]
+dev = [
+    "locust>=2.47.0",
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
 
 # Linux (the Docker images) takes CPU-only torch wheels instead of the CUDA build.
 [tool.uv.sources]

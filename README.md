@@ -91,9 +91,14 @@ uv run python -m rag.evals.experiments.filtered_search      # selectivity 50% to
 uv run python -m rag.evals.experiments.model_migration      # second embedder under INDEX_VERSION v2
 uv run python -m rag.evals.experiments.chunk_size           # 64/128/256-token children, with/without parents
 uv run python -m rag.evals.experiments.contextual_chunking  # with and without chunk context
+uv run python -m rag.evals.experiments.loadtest             # per-stage latency at 1, 2, 4, 8 users (Locust)
+uv run python -m rag.evals.experiments.cache_behaviour      # cache hit and false-hit rates by threshold
+uv run python -m rag.evals.experiments.freshness            # file change to searchable and to eviction
+uv run python -m rag.evals.experiments.failure_injection    # quality and latency under each fault
+uv run python -m rag.evals.experiments.cost                 # tokens and $ per query by stage and top-k
 ```
 
-`scale_memory` and `filtered_search` copy the benchmark's vectors into scratch Qdrant collections and delete them afterwards. `chunk_size` and `contextual_chunking` index a sample of the corpus into their own databases (`rag_bench_<variant>`) and indexes, deleted after scoring. `model_migration` leaves `bench_chunks_v2` in place. Without `LLM_*` settings, answers, judgements and contexts come from the fake LLM, and the table says so.
+`scale_memory` and `filtered_search` copy the benchmark's vectors into scratch Qdrant collections and delete them afterwards. `chunk_size` and `contextual_chunking` index a sample of the corpus into their own databases (`rag_bench_<variant>`) and indexes, deleted after scoring. `model_migration` leaves `bench_chunks_v2` in place. `loadtest` serves the API in its own process on `--port` (default 8765) and drives it with Locust (`rag/evals/loadtest.py`). `freshness` runs the real worker on a temporary folder with its own database and empties the scratch Redis database `--redis-db` (default 1). `failure_injection` sets `fault:` keys in the configured Redis, so do not run it next to an API you are using; it clears them when it ends. `cost` takes prices in dollars per million tokens as arguments. Without `LLM_*` settings, answers, judgements and contexts come from the fake LLM, and the table says so.
 
 `tests/fixtures/make_pdf.py` regenerates the fixture PDF byte for byte (`uv run python tests/fixtures/make_pdf.py`).
 

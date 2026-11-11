@@ -3,7 +3,8 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from rag.evals.benchmark import DATA_DIR, BenchDoc, bench_settings, load, read_q
 from rag.evals.score import NOT_CONFIG, Golden, benchmark_questions, metrics_of, run_question
 from rag.evals.synthetic import synthetic_acl
 from rag.worker import main as worker
+from rag.worker.chunk import Counter
 
 Points = list[tuple[dict[str, Any], list[float]]]
 Experiment = Callable[[Settings, argparse.Namespace], Awaitable[str]]
@@ -127,14 +129,19 @@ async def drop_variant(base: Settings, settings: Settings) -> None:
     await drop_indexes(settings)
 
 
-async def build_variant(
-    base: Settings, settings: Settings, docs: list[BenchDoc], user: str, llm: LLM | None = None
-) -> dict[str, Any]:
-    """Index the documents into the variant's emptied stores; returns the load counts."""
+async def reset_variant(base: Settings, settings: Settings) -> None:
+    """Drop the variant's stores, then create and migrate its database."""
     await drop_variant(base, settings)
     database = conninfo_to_dict(settings.pg_dsn)["dbname"]
     await pg.ensure_database(base.pg_dsn, database, base.store_timeout_s)
     await migrate(settings, job_id=f"experiment-{settings.index_version}")
+
+
+async def build_variant(
+    base: Settings, settings: Settings, docs: list[BenchDoc], user: str, llm: LLM | None = None
+) -> dict[str, Any]:
+    """Index the documents into the variant's emptied stores; returns the load counts."""
+    await reset_variant(base, settings)
     acl = synthetic_acl(SAMPLE_FOLDER.split("/")[0], len(docs), 1, 1.0, user)
     deps = await worker.open_deps(settings)
     deps.llm = llm or deps.llm
@@ -142,6 +149,27 @@ async def build_variant(
         return await load(deps, docs, acl, user, batch_size=64)
     finally:
         await worker.close_deps(deps)
+
+
+@dataclass
+class CountingLLM:
+    """An LLM that counts its calls and their prompt and completion tokens."""
+
+    llm: LLM
+    count: Counter
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    async def complete(self, system: str, user: str, *, model: str, max_tokens: int) -> str:
+        reply = await self.llm.complete(system, user, model=model, max_tokens=max_tokens)
+        self.calls += 1
+        self.prompt_tokens += self.count(system) + self.count(user)
+        self.completion_tokens += self.count(reply)
+        return reply
+
+    def stream(self, system: str, user: str, *, model: str, max_tokens: int) -> AsyncIterator[str]:
+        return self.llm.stream(system, user, model=model, max_tokens=max_tokens)
 
 
 def fake_llm_unless_configured(settings: Settings) -> LLM | None:
