@@ -103,3 +103,19 @@ async def get_texts(
         index=settings.chunks_name, body={"ids": chunk_ids}, _source=["text"]
     )
     return {doc["_id"]: doc["_source"]["text"] for doc in response["docs"] if doc.get("found")}
+
+
+async def scroll_chunks(client: AsyncOpenSearch, settings: Settings) -> list[dict[str, Any]]:
+    """Every indexed chunk: its payload fields and its `text`."""
+    response = await client.search(
+        index=settings.chunks_name, body={"query": {"match_all": {}}}, scroll="2m", size=1000
+    )
+    chunks, scroll_id = [], response["_scroll_id"]
+    try:
+        while hits := response["hits"]["hits"]:
+            chunks += [hit["_source"] for hit in hits]
+            response = await client.scroll(scroll_id=scroll_id, scroll="2m")
+            scroll_id = response["_scroll_id"]
+    finally:
+        await client.clear_scroll(scroll_id=scroll_id)
+    return chunks

@@ -313,3 +313,13 @@ async def ensure_database(dsn: str, name: str, timeout_s: float) -> None:
         cur = await conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
         if await cur.fetchone() is None:
             await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+
+
+async def drop_database(dsn: str, name: str, timeout_s: float) -> None:
+    """Drop the database `name`, closing its connections, on the server that `dsn` points to."""
+    async with await AsyncConnection.connect(
+        dsn, autocommit=True, connect_timeout=int(timeout_s)
+    ) as conn:
+        await conn.execute(
+            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+        )

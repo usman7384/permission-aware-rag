@@ -80,6 +80,21 @@ make bench-eval         # recall@10, recall@100, nDCG@10 and MRR against the Sci
 
 `make bench-load` runs `python -m rag.evals.benchmark`; it downloads the dataset once from the BEIR site into the git-ignored `data/beir/`, and writes into the Postgres database `rag_bench` and Qdrant collections and an OpenSearch index prefixed `bench_`, never into development data. Every document gets a synthetic folder, and the user `user:bench` gets group memberships that let it read a chosen share of them: `--folders 1000 --selectivity 0.01` gives 1% (`--help` lists the other options, such as `--limit` for a smaller load and `--dataset` for another BEIR dataset). Changing only `--selectivity` re-runs quickly, because it changes memberships, not the index. A different `--folders` needs a fresh `--database` and `--prefix`. `QDRANT_QUANTIZATION` (`int8` or `binary`) and `QDRANT_VECTORS_ON_DISK=true` choose how the chunk vectors are stored when a collection is created.
 
+### Experiments (Phase 2)
+
+Each experiment is one script in `rag/evals/experiments/`, run against the loaded benchmark (`make bench-load` first). Each reads its sizes from arguments (`--help` lists them), writes one `eval_runs` row in `rag_bench` and prints one table:
+
+```
+uv run python -m rag.evals.experiments.ablation             # sparse, dense, hybrid, hybrid + rerank
+uv run python -m rag.evals.experiments.scale_memory         # float32, int8, binary at two sizes
+uv run python -m rag.evals.experiments.filtered_search      # selectivity 50% to 0.1%, exact fallback
+uv run python -m rag.evals.experiments.model_migration      # second embedder under INDEX_VERSION v2
+uv run python -m rag.evals.experiments.chunk_size           # 64/128/256-token children, with/without parents
+uv run python -m rag.evals.experiments.contextual_chunking  # with and without chunk context
+```
+
+`scale_memory` and `filtered_search` copy the benchmark's vectors into scratch Qdrant collections and delete them afterwards. `chunk_size` and `contextual_chunking` index a sample of the corpus into their own databases (`rag_bench_<variant>`) and indexes, deleted after scoring. `model_migration` leaves `bench_chunks_v2` in place. Without `LLM_*` settings, answers, judgements and contexts come from the fake LLM, and the table says so.
+
 `tests/fixtures/make_pdf.py` regenerates the fixture PDF byte for byte (`uv run python tests/fixtures/make_pdf.py`).
 
 ## Pinned images

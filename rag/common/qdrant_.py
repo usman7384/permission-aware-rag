@@ -12,10 +12,12 @@ from qdrant_client.models import (
     Memory,
     PayloadSchemaType,
     PointStruct,
+    QuantizationSearchParams,
     Range,
     ScalarQuantization,
     ScalarQuantizationConfig,
     ScalarType,
+    SearchParams,
     VectorParams,
 )
 
@@ -107,19 +109,59 @@ async def set_principals(
     )
 
 
+def _readable(principals: list[str]) -> Filter:
+    return Filter(must=[FieldCondition(key="principals", match=MatchAny(any=principals))])
+
+
+# A full scan of the original vectors, ignoring the HNSW index and any quantization.
+EXACT = SearchParams(exact=True, quantization=QuantizationSearchParams(ignore=True))
+
+
 async def search_chunks(
     client: AsyncQdrantClient,
     settings: Settings,
     vector: list[float],
     principals: list[str],
     limit: int,
+    exact: bool = False,
 ) -> list[dict[str, Any]]:
     """Payloads of the nearest chunks whose `principals` share at least one of `principals`."""
-    allowed = Filter(must=[FieldCondition(key="principals", match=MatchAny(any=principals))])
     response = await client.query_points(
-        settings.chunks_name, query=vector, query_filter=allowed, limit=limit, with_payload=True
+        settings.chunks_name,
+        query=vector,
+        query_filter=_readable(principals),
+        search_params=EXACT if exact else None,
+        limit=limit,
+        with_payload=True,
     )
     return [point.payload for point in response.points]
+
+
+async def count_chunks(client: AsyncQdrantClient, settings: Settings, principals: list[str]) -> int:
+    """The exact number of chunks whose `principals` share at least one of `principals`."""
+    response = await client.count(
+        settings.chunks_name, count_filter=_readable(principals), exact=True
+    )
+    return response.count
+
+
+async def scroll_chunks(
+    client: AsyncQdrantClient, settings: Settings, limit: int
+) -> list[tuple[dict[str, Any], list[float]]]:
+    """(payload, vector) of up to `limit` chunks, in point-ID order."""
+    points, offset = [], None
+    while len(points) < limit:
+        batch, offset = await client.scroll(
+            settings.chunks_name,
+            limit=min(1000, limit - len(points)),
+            offset=offset,
+            with_payload=True,
+            with_vectors=True,
+        )
+        points += [(point.payload or {}, point.vector) for point in batch]
+        if offset is None:
+            break
+    return points
 
 
 async def nearest_answer(

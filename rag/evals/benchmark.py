@@ -19,6 +19,7 @@ from rag.common.log import log
 from rag.common.migrate import migrate
 from rag.evals.synthetic import Acl, reader_group, synthetic_acl
 from rag.worker.chunk import Parent, chunk
+from rag.worker.contextualize import contextualize
 from rag.worker.index import Deps, chunk_payloads, cleanup, commit, emit, hash_file, stamp
 from rag.worker.main import close_deps, open_deps
 from rag.worker.parse import parse
@@ -41,6 +42,7 @@ class Pending:
     content_hash: str
     version: int
     parents: list[Parent]
+    contexts: list[str | None]
     principals: list[str]
 
 
@@ -101,23 +103,29 @@ def bench_settings(settings: Settings, database: str, prefix: str) -> Settings:
 
 
 async def prepare(deps: Deps, path: str, data: bytes) -> Pending | None:
-    """Parse, chunk and stamp one document; None when it is already indexed unchanged."""
+    """Parse, chunk, contextualize if set, and stamp one document; None when it is already
+    indexed unchanged."""
     doc, content_hash, s = doc_id(path), hash_file(data), deps.settings
     async with deps.pg.connection() as conn:
         row = await pg.get_document(conn, doc)
         if row is not None and row[0] == content_hash and not row[2]:
             return None
         principals = await stamp(conn, path, doc)
-    parents = chunk(parse(path, data), s.parent_tokens, s.child_tokens, deps.embedder.count_tokens)
-    return Pending(doc, path, content_hash, row[1] + 1 if row else 1, parents, principals)
+    sections, count = parse(path, data), deps.embedder.count_tokens
+    parents = chunk(sections, s.parent_tokens, s.child_tokens, count)
+    contexts: list[str | None] = [None] * len(parents)
+    if s.contextual_chunking:
+        document = "".join(section.text for section in sections)
+        contexts = list(await contextualize(deps.llm, s, document, parents, count))
+    version = row[1] + 1 if row else 1
+    return Pending(doc, path, content_hash, version, parents, contexts, principals)
 
 
 async def index_batch(deps: Deps, batch: list[Pending]) -> int:
     """Index a batch with one embedding call and one write per store; returns the chunk count."""
     s, payloads, texts = deps.settings, [], []
     for item in batch:
-        contexts: list[str | None] = [None] * len(item.parents)
-        p, t = chunk_payloads(item.doc, item.version, item.parents, contexts, item.principals)
+        p, t = chunk_payloads(item.doc, item.version, item.parents, item.contexts, item.principals)
         payloads += p
         texts += t
     if payloads:
@@ -125,8 +133,7 @@ async def index_batch(deps: Deps, batch: list[Pending]) -> int:
         await qdrant_.upsert_chunks(deps.qdrant, s, payloads, vectors)
         await opensearch_.index_chunks(deps.opensearch, s, payloads, texts)
     for item in batch:
-        contexts = [None] * len(item.parents)
-        version, parents = item.version, item.parents
+        version, parents, contexts = item.version, item.parents, item.contexts
         await commit(deps, item.doc, item.path, item.content_hash, version, parents, contexts)
         # A first version has nothing older to clean up and no cached answer to purge.
         if item.version > 1:

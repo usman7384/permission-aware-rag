@@ -197,11 +197,15 @@ def benchmark_questions(
     return questions[:limit]
 
 
+def recall_depth(settings: Settings) -> Settings:
+    """The settings keeping enough candidates to measure recall@100."""
+    keep = max(settings.fused_keep, BENCH_TOP_K)
+    return settings.model_copy(update={"fused_keep": keep, "rerank_keep": BENCH_TOP_K})
+
+
 def benchmark_settings(settings: Settings, args: argparse.Namespace) -> Settings:
     """The benchmark stores, keeping enough candidates to measure recall@100."""
-    bench = bench_settings(settings, args.database, args.prefix)
-    keep = max(bench.fused_keep, BENCH_TOP_K)
-    return bench.model_copy(update={"fused_keep": keep, "rerank_keep": BENCH_TOP_K})
+    return recall_depth(bench_settings(settings, args.database, args.prefix))
 
 
 async def run(args: argparse.Namespace) -> None:
