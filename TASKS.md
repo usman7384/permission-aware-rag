@@ -211,3 +211,44 @@ One checkbox per script. The question in brackets is what the result must let th
 - [x] `cost.py`: tokens and cost per query by stage, and the effect of the caches, prompt caching and top-k. [How do you cut cost?]
 
 Owner action: write the results table and the design document from these runs.
+
+## Phase 3
+
+Approved by the owner in chat on 2026-11-11, after the system-design review. These change tables, endpoints and cache payloads; update `SPEC.md` to match (the owner approved these spec changes) and record each design choice in `DECISIONS.md`. Cache keys stay unchanged.
+
+### M11. Design hardening
+
+Split into two parts, each its own commit: `M11a: Outbox, filtered-search planning, cache safety` and `M11b: Inference service`.
+
+#### M11a
+
+- [ ] **Transactional outbox.** New migration `002_outbox.sql`: `outbox(id BIGSERIAL PRIMARY KEY, stream TEXT NOT NULL, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), published_at TIMESTAMPTZ)` with an index on unpublished rows. Every event for `events:changes` (worker `emit`, delete jobs, `/admin/tuples`) is inserted in the same Postgres transaction as the change it describes; nothing writes to `events:changes` directly any more. A relay loop in the worker publishes unpublished rows in id order (`FOR UPDATE SKIP LOCKED`), `XADD`s them and sets `published_at`. Delivery is at-least-once, so every invalidator action must stay idempotent. Settings: `OUTBOX_POLL_MS`, `OUTBOX_BATCH`.
+- [ ] **Filtered-search planning.** Before the dense branch, estimate how many chunks the user can read (choose a cheap estimate, e.g. Qdrant `count` with the principals filter, or chunk counts per readable document; record the choice). If it is at most `EXACT_SCAN_MAX_CHUNKS` (default 2000), run the dense search with `exact=True`; otherwise use HNSW. Record the plan used per request (log field and a `timings`-adjacent field or log only; record the choice). Check the pinned Qdrant version's docs for its own filtered-search planner (`full_scan_threshold`, ACORN or similar) and record how the app-level plan interacts with it.
+- [ ] **Cache safety.**
+  - `ans:{cache_key}` payload gains `doc_versions` (`{doc_id: version}` for every document in the context).
+  - Every exact or semantic hit is validated before serving: every document in `doc_versions` is not deleted, still has that version, and is in `readable_docs(principals, ...)`. A failed check deletes the entry (as for an expired key) and counts as a miss. This closes the stale-write race and makes cached answers obey live permissions like `recheck` does.
+  - Semantic hits also require the same set of negation markers in both questions (pure function in `text.py`, e.g. not, no, never, without, except, false; record the list).
+  - Default `SEMANTIC_CACHE_THRESHOLD` becomes `0.98`.
+  - Request coalescing: concurrent identical cache misses (same `cache_key`) in one API process wait for the first; if its answer was cached they replay it as an `exact` hit, otherwise they run their own pipeline. Record whether cross-process coalescing is done and why.
+
+Tests:
+
+- `unit/test_outbox.py` or integration equivalent: an event row is written in the same transaction as the change (rolling back the change leaves no row).
+- `integration/test_outbox.py`: a tuple change committed while Redis is unreachable is published once Redis is back; a relay crash after `XADD` but before `published_at` causes a duplicate that the invalidator handles harmlessly.
+- `integration/test_filtered_plan.py`: with a user who can read very few chunks in an HNSW-indexed collection, the plan is `exact` and recall matches an exact scan; a broad user gets `hnsw`.
+- `unit/test_text.py`: negation-marker cases.
+- `integration/test_cache.py`: a cached answer whose document version changed (with the invalidator not running) is not served; a cached answer for a document the user lost access to (viewer tuple removed, invalidator not running) is not served; a negated rewording does not hit the semantic cache; N concurrent identical misses produce one pipeline run and N-1 exact replays.
+- Re-run `filtered_search.py` and `cache_behaviour.py` and put the new tables in the report.
+
+#### M11b
+
+- [ ] **Inference service.** New package `rag/inference/` (add to the layout in `SPEC.md` section 3): a FastAPI app with `POST /embed` (`{"texts": [...], "kind": "query" | "document"}`) and `POST /rerank` (`{"query", "passages"}`), and `GET /healthz`. It loads the real or fake models per `MODEL_BACKEND`. It owns backpressure: a bounded number of concurrent model calls (`INFERENCE_CONCURRENCY`) and a bounded wait queue (`INFERENCE_QUEUE_MAX`); when full it returns 503 at once instead of queueing.
+- [ ] The API and worker use remote clients that satisfy the `Embedder` and `Reranker` protocols when `INFERENCE_URL` is set, and in-process models otherwise (tests keep using in-process fakes by default). Every call has a timeout. A 503 or timeout from `/rerank` is a rerank failure (`degraded: rerank`); from `/embed` on the query path it is an error event (choose the code, record it).
+- [ ] `/healthz` on the API gains an `inference` check when `INFERENCE_URL` is set.
+- [ ] `make inference` runs it locally; `docker-compose.yml` gains an `inference` service under the `app` profile; the API and worker containers point at it.
+
+Tests:
+
+- `integration/test_inference.py`: the remote clients return the same vectors and scores as the in-process fakes (run the inference app in-process via an ASGI transport or a local uvicorn); with the queue full the service returns 503 and the API answers with `degraded: rerank`; `/healthz` reports `inference`.
+- The whole suite passes with `INFERENCE_URL` set (add `make test-int-remote` or document the command).
+- Re-run `loadtest.py` with the inference service and report: at rising users, the API's non-model work (e.g. exact-cache hits or `/healthz`) keeps low latency while reranking saturates, and overload produces fast `degraded: rerank` instead of unbounded latency.
