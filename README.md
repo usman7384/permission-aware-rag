@@ -6,8 +6,8 @@ A retrieval-augmented generation (RAG) service that runs on one laptop. It answe
 
 ## Architecture
 
-- **Worker** (`rag/worker`): watches `CORPUS_DIR`, queues one job per changed file in a Redis stream, parses (Markdown splitter, docling for PDF), chunks into parents and children, optionally adds an LLM-written context per parent, stamps each chunk with the principals allowed to read it, and writes Qdrant (dense vectors), OpenSearch (BM25) and Postgres (parents, versions). It also runs the invalidator, which re-stamps permissions and purges caches on change events.
-- **API** (`rag/api`): `POST /ask` runs sixteen timed steps: authenticate and rate-limit, expand the user's groups, input guard, rewrite the question from the session, exact cache, embed, semantic cache, hybrid retrieval with a permission filter, reciprocal rank fusion, a live permission recheck, cross-encoder reranking, parent hydration, context assembly, streamed generation, output guard (citations, PII), persist and cache writes. Answers stream as server-sent events.
+- **Worker** (`rag/worker`): watches `CORPUS_DIR`, queues one job per changed file in a Redis stream, parses (Markdown splitter, docling for PDF), chunks into parents and children, optionally adds an LLM-written context per parent, stamps each chunk with the principals allowed to read it, and writes Qdrant (dense vectors), OpenSearch (BM25) and Postgres (parents, versions). It also runs the outbox relay, which publishes change events committed to Postgres to a Redis stream, and the invalidator, which re-stamps permissions and purges caches on those events.
+- **API** (`rag/api`): `POST /ask` runs sixteen timed steps: authenticate and rate-limit, expand the user's groups, input guard, rewrite the question from the session, exact cache, embed, semantic cache (hits checked against live versions and permissions), hybrid retrieval with a permission filter (an exact scan when the user can read few chunks), reciprocal rank fusion, a live permission recheck, cross-encoder reranking, parent hydration, context assembly, streamed generation, output guard (citations, PII), persist and cache writes. Answers stream as server-sent events.
 - **Stores**: Postgres is the source of truth (documents, parents, permission tuples, requests, evaluations); Qdrant, OpenSearch and Redis (job streams, caches, rate limits, fault flags) can be rebuilt from it and the files.
 - **Evaluation** (`rag/evals/score.py`): recall@10, MRR, LLM-judged faithfulness and per-stage latency over `rag/evals/golden.jsonl`, stored in `eval_runs`.
 
@@ -87,7 +87,7 @@ Each experiment is one script in `rag/evals/experiments/`, run against the loade
 ```
 uv run python -m rag.evals.experiments.ablation             # sparse, dense, hybrid, hybrid + rerank
 uv run python -m rag.evals.experiments.scale_memory         # float32, int8, binary at two sizes
-uv run python -m rag.evals.experiments.filtered_search      # selectivity 50% to 0.1%, exact fallback
+uv run python -m rag.evals.experiments.filtered_search      # selectivity 50% to 0.1%, HNSW vs the planned search
 uv run python -m rag.evals.experiments.model_migration      # second embedder under INDEX_VERSION v2
 uv run python -m rag.evals.experiments.chunk_size           # 64/128/256-token children, with/without parents
 uv run python -m rag.evals.experiments.contextual_chunking  # with and without chunk context

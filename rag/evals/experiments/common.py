@@ -202,18 +202,22 @@ async def evaluate_variant(
 
 
 async def build_collection(
-    client: AsyncQdrantClient, settings: Settings, points: Points, threshold_kb: int
+    client: AsyncQdrantClient,
+    settings: Settings,
+    points: Points,
+    threshold_kb: int,
+    full_scan_kb: int | None = None,
 ) -> float:
-    """Create the settings' chunks collection from the points, with Qdrant's indexing and
-    full-scan thresholds set to `threshold_kb`; returns seconds until Qdrant has finished
-    optimizing it."""
+    """Create the settings' chunks collection from the points, with Qdrant's indexing threshold
+    set to `threshold_kb` and its full-scan threshold to `full_scan_kb` (default the same);
+    returns seconds until Qdrant has finished optimizing it."""
     start = time.perf_counter()
     await drop_collections(client, settings)
     await qdrant_.ensure_collections(client, settings)
     await client.update_collection(
         settings.chunks_name,
         optimizers_config=OptimizersConfigDiff(indexing_threshold=threshold_kb),
-        hnsw_config=HnswConfigDiff(full_scan_threshold=threshold_kb),
+        hnsw_config=HnswConfigDiff(full_scan_threshold=full_scan_kb or threshold_kb),
     )
     for first in range(0, len(points), 1000):
         batch = points[first : first + 1000]

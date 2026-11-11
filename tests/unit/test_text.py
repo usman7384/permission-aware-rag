@@ -1,6 +1,6 @@
 import pytest
 
-from rag.common.text import extract_entities, normalize_query
+from rag.common.text import extract_entities, negation_markers, normalize_query
 
 
 @pytest.mark.parametrize(
@@ -35,3 +35,21 @@ def test_normalize_query(raw: str, expected: str) -> None:
 )
 def test_extract_entities(question: str, expected: list[str]) -> None:
     assert extract_entities(question) == expected
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Does vitamin D reduce fractures?", []),
+        ("Does vitamin D not reduce fractures?", ["not"]),
+        ("It is false that vitamin D reduces fractures.", ["false"]),
+        ("Why doesn't the API allow bursts?", ["not"]),
+        ("Why DON\u2019T we deploy on Fridays?", ["not"]),
+        ("Is there no limit, never ever?", ["never", "no"]),
+        ("Everything except HR, without approval", ["except", "without"]),
+        ("Nothing notable or knotty here", []),
+        ("I cannot log in and can't reset", ["cannot", "not"]),
+    ],
+)
+def test_negation_markers(question: str, expected: list[str]) -> None:
+    assert negation_markers(question) == expected

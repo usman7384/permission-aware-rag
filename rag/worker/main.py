@@ -10,13 +10,13 @@ from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.faults import FaultyLLM
 from rag.common.ids import doc_id
-from rag.common.keys import CHANGES_GROUP, CHANGES_STREAM, JOBS_GROUP, JOBS_STREAM
+from rag.common.keys import CHANGES_GROUP, CHANGES_STREAM, JOBS_GROUP, JOBS_STREAM, doc_event
 from rag.common.log import log
 from rag.common.models import make_embedder, make_llm
-from rag.worker import invalidate
+from rag.worker import invalidate, relay
 from rag.worker.chunk import chunk
 from rag.worker.contextualize import contextualize
-from rag.worker.index import Deps, cleanup, commit, emit, hash_file, index_new, stamp
+from rag.worker.index import Deps, cleanup, commit, hash_file, index_new, stamp
 from rag.worker.parse import parse
 from rag.worker.watch import reconcile, watch
 
@@ -53,7 +53,6 @@ async def upsert(deps: Deps, path: str, job_id: str) -> None:
     chunks = await index_new(deps, doc, version, parents, contexts, principals)
     await commit(deps, doc, path, content_hash, version, parents, contexts)
     await cleanup(deps, doc, version)
-    await emit(deps, "doc_changed", doc)
     log("document_indexed", job_id=job_id, path=path, version=version, chunks=chunks)
 
 
@@ -66,9 +65,9 @@ async def delete(deps: Deps, path: str, job_id: str) -> None:
         await pg.mark_document_deleted(conn, doc)
         await pg.delete_parents(conn, doc)
         await pg.delete_subject_tuples(conn, f"doc:{doc}", "parent")
+        await pg.insert_outbox(conn, CHANGES_STREAM, doc_event("doc_deleted", [str(doc)]))
     await qdrant_.delete_chunks(deps.qdrant, deps.settings, str(doc))
     await opensearch_.delete_chunks(deps.opensearch, deps.settings, str(doc))
-    await emit(deps, "doc_deleted", doc)
     log("document_deleted", job_id=job_id, path=path)
 
 
@@ -157,6 +156,7 @@ async def run(settings: Settings) -> None:
             tasks.create_task(reclaim_loop(deps, consumer, reclaim_once))
             tasks.create_task(consume_loop(deps, consumer, invalidate.consume_once))
             tasks.create_task(reclaim_loop(deps, consumer, invalidate.reclaim_once))
+            tasks.create_task(relay.relay_loop(deps))
     finally:
         await close_deps(deps)
 

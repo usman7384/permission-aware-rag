@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 from rag.common.text import normalize_query
 
@@ -24,6 +25,15 @@ JOBS_GROUP = "workers"
 DEAD_STREAM = "ingest:dead"
 CHANGES_STREAM = "events:changes"
 CHANGES_GROUP = "invalidators"
+
+
+def doc_event(event_type: str, doc_ids: list[str]) -> dict[str, str]:
+    """The fields of a `doc_changed` or `doc_deleted` event on `events:changes`."""
+    return {"type": event_type, "doc_ids": json.dumps(doc_ids)}
+
+
+def tuple_event(subject: str, relation: str, obj: str) -> dict[str, str]:
+    return {"type": "tuple_changed", "subject": subject, "relation": relation, "object": obj}
 
 
 def answer_key(cache_key: str) -> str:

@@ -18,6 +18,7 @@ from rag.api.pipeline import Deps, ask, close_deps, expand, open_deps, timed
 from rag.common import opensearch_, pg, qdrant_, redis_
 from rag.common.config import Settings
 from rag.common.log import log
+from rag.common.permissions import change_tuple
 
 
 @asynccontextmanager
@@ -151,16 +152,14 @@ async def admin_tuples(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """Write or delete a tuple, then announce it on `events:changes` once it is committed."""
+    """Write or delete a tuple and, in the same transaction, its event for `events:changes`."""
     deps: Deps = request.app.state.deps
     request_id = str(uuid.uuid4())
     async with deps.pg.connection() as conn:
         caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)
         if not caller.is_admin:
             raise ApiError(401, "unauthorized", "an admin API key is required")
-        write = pg.insert_tuple if body.op == "add" else pg.delete_tuple
-        await write(conn, body.subject, body.relation, body.object)
-    await redis_.emit_tuple_change(deps.redis, body.subject, body.relation, body.object)
+        await change_tuple(conn, body.op, body.subject, body.relation, body.object)
     log("tuple_changed", request_id=request_id, user_id=caller.user_id, **body.model_dump())
     return Response(status_code=204)
 

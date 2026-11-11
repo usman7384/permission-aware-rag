@@ -196,6 +196,28 @@ async def live_document_versions(conn: AsyncConnection, doc_ids: list[str]) -> d
     return dict(await cur.fetchall())
 
 
+async def insert_outbox(conn: AsyncConnection, stream: str, payload: dict[str, str]) -> None:
+    """Record an event for the relay; call it inside the transaction of the change it describes."""
+    await conn.execute(
+        "INSERT INTO outbox (stream, payload) VALUES (%s, %s)", (stream, Jsonb(payload))
+    )
+
+
+async def claim_outbox(conn: AsyncConnection, limit: int) -> list[tuple[int, str, dict[str, str]]]:
+    """Lock up to `limit` unpublished events (id, stream, payload) in id order, skipping rows
+    another relay holds."""
+    cur = await conn.execute(
+        "SELECT id, stream, payload FROM outbox WHERE published_at IS NULL "
+        "ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED",
+        (limit,),
+    )
+    return await cur.fetchall()
+
+
+async def mark_outbox_published(conn: AsyncConnection, ids: list[int]) -> None:
+    await conn.execute("UPDATE outbox SET published_at = now() WHERE id = ANY(%s)", (ids,))
+
+
 async def get_api_key(conn: AsyncConnection, key_hash: str) -> tuple[str, bool] | None:
     """(user_id, is_admin) for a key hash, or None if the key is unknown."""
     cur = await conn.execute(

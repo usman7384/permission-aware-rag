@@ -4,7 +4,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from rag.common import redis_
 from rag.common.ids import doc_id
-from rag.common.keys import CHANGES_STREAM, JOBS_GROUP, JOBS_STREAM
+from rag.common.keys import JOBS_GROUP, JOBS_STREAM
 from rag.worker.chunk import chunk
 from rag.worker.index import Deps
 from rag.worker.main import consume_once
@@ -78,12 +78,12 @@ async def test_fixture_corpus_yields_12_documents_and_matching_chunks(deps: Deps
 async def test_reingesting_unchanged_files_writes_nothing(deps: Deps) -> None:
     await ingest(deps)
     before = await fetch(deps, "SELECT doc_id, version, updated_at FROM documents ORDER BY 1")
-    events = await deps.redis.xlen(CHANGES_STREAM)
+    events = await fetch(deps, "SELECT count(*) FROM outbox")
     await ingest(deps)
     assert await fetch(deps, "SELECT doc_id, version, updated_at FROM documents ORDER BY 1") == (
         before
     )
-    assert await deps.redis.xlen(CHANGES_STREAM) == events
+    assert await fetch(deps, "SELECT count(*) FROM outbox") == events
 
 
 async def test_changed_file_bumps_version_and_leaves_no_old_chunks(deps: Deps) -> None:
@@ -114,5 +114,5 @@ async def test_deleted_file_removes_chunks_parents_and_sets_deleted_at(deps: Dep
     assert await opensearch_versions(deps, doc) == []
     parent_tuples = await fetch(deps, "SELECT * FROM tuples WHERE subject = %s", f"doc:{doc}")
     assert parent_tuples == []
-    [(_, last_event)] = await deps.redis.xrevrange(CHANGES_STREAM, count=1)
+    [(last_event,)] = await fetch(deps, "SELECT payload FROM outbox ORDER BY id DESC LIMIT 1")
     assert last_event == {"type": "doc_deleted", "doc_ids": f'["{doc}"]'}

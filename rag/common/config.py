@@ -30,10 +30,11 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     fused_keep: int = 50
     rerank_keep: int = 10
+    exact_scan_max_chunks: int = 2000
     abstain_threshold: float = 0.0
     context_token_budget: int = 6000
     answer_max_tokens: int = 1024
-    semantic_cache_threshold: float = 0.96
+    semantic_cache_threshold: float = 0.98
     answer_ttl_s: int = 3600
     chunk_ttl_s: int = 86400
     history_turns: int = 4
@@ -55,6 +56,8 @@ class Settings(BaseSettings):
     max_deliveries: int = 3
     reclaim_idle_ms: int = 30000
     worker_block_ms: int = 2000
+    outbox_poll_ms: int = 200
+    outbox_batch: int = 100
 
     pg_dsn: str = "postgresql://rag:rag@127.0.0.1:5432/rag"
     redis_url: str = "redis://127.0.0.1:6380/0"

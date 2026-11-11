@@ -8,7 +8,6 @@ from redis.exceptions import ResponseError
 
 from rag.common.config import Settings
 from rag.common.keys import (
-    CHANGES_STREAM,
     DEAD_STREAM,
     JOBS_GROUP,
     JOBS_STREAM,
@@ -86,15 +85,8 @@ async def dead_letter(
         await pipe.execute()
 
 
-async def emit_change(client: Redis, event_type: str, doc_ids: list[str]) -> None:
-    await client.xadd(CHANGES_STREAM, {"type": event_type, "doc_ids": json.dumps(doc_ids)})
-
-
-async def emit_tuple_change(client: Redis, subject: str, relation: str, obj: str) -> None:
-    await client.xadd(
-        CHANGES_STREAM,
-        {"type": "tuple_changed", "subject": subject, "relation": relation, "object": obj},
-    )
+async def publish(client: Redis, stream: str, fields: dict[str, str]) -> None:
+    await client.xadd(stream, fields)
 
 
 async def count_request(client: Redis, key_hash: str, ttl_s: int) -> int:

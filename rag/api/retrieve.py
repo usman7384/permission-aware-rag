@@ -36,16 +36,28 @@ def _candidate(payload: dict[str, Any]) -> Candidate:
     )
 
 
+async def plan_dense(
+    client: AsyncQdrantClient, settings: Settings, principals: list[str]
+) -> tuple[str, int]:
+    """`exact` when the principals can read at most `EXACT_SCAN_MAX_CHUNKS` chunks (a full scan
+    of so few beats a filtered HNSW walk, which loses recall), else `hnsw`; and the count."""
+    readable = await qdrant_.count_chunks(client, settings, principals)
+    return ("exact" if readable <= settings.exact_scan_max_chunks else "hnsw"), readable
+
+
 async def dense(
     client: AsyncQdrantClient,
     redis: Redis,
     settings: Settings,
     vector: list[float],
     principals: list[str],
+    request_id: str,
 ) -> list[Candidate]:
     await faults.inject(redis, "dense", settings.fault_slow_ms)
+    plan, readable = await plan_dense(client, settings, principals)
+    log("dense_plan", request_id=request_id, plan=plan, readable_chunks=readable)
     payloads = await qdrant_.search_chunks(
-        client, settings, vector, principals, settings.dense_top_k
+        client, settings, vector, principals, settings.dense_top_k, exact=plan == "exact"
     )
     return [_candidate(p) for p in payloads]
 
@@ -83,7 +95,7 @@ async def retrieve(
 ) -> tuple[list[list[Candidate]], list[str]]:
     """Run both branches concurrently; returns the lists that succeeded and the failed names."""
     timeout_s = settings.retrieve_timeout_ms / 1000
-    dense_call = dense(qdrant, redis, settings, vector, principals)
+    dense_call = dense(qdrant, redis, settings, vector, principals, request_id)
     sparse_call = sparse(opensearch, redis, settings, question, principals)
     results = await asyncio.gather(
         _branch("dense", dense_call, timeout_s, request_id),

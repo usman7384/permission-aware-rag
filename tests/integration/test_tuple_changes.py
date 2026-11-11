@@ -7,7 +7,7 @@ from rag.api import pipeline
 from rag.common import redis_
 from rag.common.ids import doc_id
 from rag.common.keys import CHANGES_GROUP, CHANGES_STREAM
-from rag.worker import invalidate
+from rag.worker import invalidate, relay
 from rag.worker.index import Deps
 
 SPECS = sorted(path for path in CODE_WORDS if path.startswith("specs/"))
@@ -21,9 +21,19 @@ async def change_tuple(
 
 
 async def run_invalidator(deps: Deps) -> None:
+    """Relay the outbox to `events:changes`, then handle every event."""
     await redis_.ensure_group(deps.redis, CHANGES_STREAM, CHANGES_GROUP)
+    while await relay.relay_once(deps):
+        pass
     while await invalidate.consume_once(deps, "test"):
         pass
+
+
+async def outbox_rows(deps: Deps) -> int:
+    async with deps.pg.connection() as conn:
+        cur = await conn.execute("SELECT count(*) FROM outbox")
+        (count,) = await cur.fetchone()
+    return count
 
 
 async def stamped(deps: Deps, path: str) -> set[tuple[str, ...]]:
@@ -59,6 +69,8 @@ async def test_revoked_folder_is_hidden_before_the_invalidator_runs(
         client, "remove", "group:eng", "viewer", "folder:specs", "dev-admin"
     )
     assert response.status_code == 204
+    while await relay.relay_once(ingested):
+        pass
     [(_, event)] = await ingested.redis.xrevrange(CHANGES_STREAM, count=1)
     assert event == {
         "type": "tuple_changed",
@@ -116,7 +128,7 @@ async def test_leaving_a_group_changes_fingerprint_and_results_without_restamp(
 async def test_non_admin_key_gets_401_and_changes_nothing(
     client: httpx.AsyncClient, ingested: Deps
 ) -> None:
-    events = await ingested.redis.xlen(CHANGES_STREAM)
+    events = await outbox_rows(ingested)
     for key in ("dev-ana", "dev-cal", "not-a-key"):
         response = await change_tuple(client, "add", "user:cal", "viewer", "folder:specs", key)
         assert response.status_code == 401
@@ -129,4 +141,4 @@ async def test_non_admin_key_gets_401_and_changes_nothing(
     async with ingested.pg.connection() as conn:
         cur = await conn.execute("SELECT count(*) FROM tuples WHERE subject = 'user:cal'")
         assert await cur.fetchone() == (0,)
-    assert await ingested.redis.xlen(CHANGES_STREAM) == events
+    assert await outbox_rows(ingested) == events

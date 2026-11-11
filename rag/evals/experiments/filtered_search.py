@@ -4,6 +4,7 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 
+from rag.api.retrieve import plan_dense
 from rag.common import qdrant_
 from rag.common.config import Settings
 from rag.evals.experiments import common
@@ -32,38 +33,42 @@ async def measure(
     principals: list[str],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
-    """Recall and latency of the filtered HNSW search, alone and with the exact-scan fallback."""
+    """Recall and latency of the filtered HNSW search alone, and of the pipeline's planned
+    dense search (section 8.6), whose latency includes the planning count."""
     start = time.perf_counter()
-    readable = await qdrant_.count_chunks(client, settings, principals)
-    count_ms = (time.perf_counter() - start) * 1000
+    plan, readable = await plan_dense(client, settings, principals)
+    plan_ms = (time.perf_counter() - start) * 1000
     search = (client, settings, vectors, principals, args.top_k)
     truth, exact_ms = await common.timed_searches(*search, exact=True)
     found, ann_ms = await common.timed_searches(*search, exact=False)
-    # The fallback counts the readable chunks first, and scans them exactly when they are few.
-    use_exact = readable <= args.exact_max_points
-    fallback_found = truth if use_exact else found
-    fallback_ms = [count_ms + ms for ms in (exact_ms if use_exact else ann_ms)]
+    planned_found = truth if plan == "exact" else found
+    planned_ms = [plan_ms + ms for ms in (exact_ms if plan == "exact" else ann_ms)]
     pairs = zip(found, truth, strict=True)
     return {
         "readable_chunks": readable,
         "ann_recall": mean([common.overlap(f, t) for f, t in pairs]),
         "ann_p95_ms": percentile(ann_ms, 95),
-        "fallback": "exact" if use_exact else "ann",
-        "fallback_recall": mean(
-            [common.overlap(f, t) for f, t in zip(fallback_found, truth, strict=True)]
+        "plan": plan,
+        "plan_recall": mean(
+            [common.overlap(f, t) for f, t in zip(planned_found, truth, strict=True)]
         ),
-        "fallback_p95_ms": percentile(fallback_ms, 95),
+        "plan_p95_ms": percentile(planned_ms, 95),
     }
 
 
 async def experiment(settings: Settings, args: argparse.Namespace) -> str:
     client = qdrant_.connect(settings)
-    scratch = settings.model_copy(update={"index_version": "filtered"})
+    exact_max = args.exact_max_points or settings.exact_scan_max_chunks
+    scratch = settings.model_copy(
+        update={"index_version": "filtered", "exact_scan_max_chunks": exact_max}
+    )
     runs = []
     try:
         points = await qdrant_.scroll_chunks(client, settings, args.max_chunks)
         stamped = with_folder_principals(points, args.folders, args.user)
-        build_s = await common.build_collection(client, scratch, stamped, args.threshold_kb)
+        build_s = await common.build_collection(
+            client, scratch, stamped, args.threshold_kb, args.full_scan_kb
+        )
         vectors = await common.query_vectors(settings, args, args.queries)
         doc_count = len({payload["doc_id"] for payload, _ in points})
         for selectivity in args.selectivities:
@@ -87,7 +92,13 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=10, help="neighbours compared with exact")
     parser.add_argument("--threshold-kb", type=int, default=10, help=common.THRESHOLD_HELP)
     parser.add_argument(
-        "--exact-max-points", type=int, default=2000, help="fallback: scan exactly up to N chunks"
+        "--full-scan-kb",
+        type=int,
+        default=None,
+        help="Qdrant's own full_scan_threshold (KB) for the copy; default: --threshold-kb",
+    )
+    parser.add_argument(
+        "--exact-max-points", type=int, default=None, help="default: EXACT_SCAN_MAX_CHUNKS"
     )
     parser.add_argument("--max-chunks", type=int, default=1_000_000, help="chunks to copy")
     return parser

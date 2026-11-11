@@ -1,7 +1,7 @@
 import asyncio
 import time
 from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,7 +12,7 @@ from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
 from rag.api.auth import Caller
-from rag.api.cache import CachedAnswer, exact_cache, semantic_cache, write_caches
+from rag.api.cache import CachedAnswer, CacheReader, exact_cache, semantic_cache, write_caches
 from rag.api.generate import (
     ABSTAIN_TEXT,
     Context,
@@ -45,6 +45,8 @@ class Deps:
     embedder: Embedder
     reranker: Reranker
     llm: LLM
+    # Cache keys of the cache misses this process is answering, set when each one ends.
+    inflight: dict[str, asyncio.Event] = field(default_factory=dict)
 
 
 async def open_deps(settings: Settings) -> Deps:
@@ -75,6 +77,7 @@ class Outcome:
     answer: str = ""
     citations: list[dict[str, Any]] = field(default_factory=list)
     doc_ids: list[str] = field(default_factory=list)
+    doc_versions: dict[str, int] = field(default_factory=dict)
     abstained: bool = False
     degraded: list[str] = field(default_factory=list)
     context: Context | None = None
@@ -122,25 +125,46 @@ async def embed(embedder: Embedder, question: str) -> list[float]:
     return await asyncio.to_thread(embedder.embed_query, question)
 
 
+@asynccontextmanager
+async def coalesced(
+    inflight: dict[str, asyncio.Event], key: str, wait_s: float, timings: dict[str, float]
+) -> AsyncIterator[None]:
+    """Wait (up to `wait_s`) for an identical request already running in this process, so its
+    cached answer can be replayed; otherwise mark this request as running until the block ends."""
+    running = inflight.get(key)
+    if running is not None:
+        with timed(timings, "coalesce"), suppress(TimeoutError):
+            await asyncio.wait_for(running.wait(), wait_s)
+        yield
+        return
+    inflight[key] = finished = asyncio.Event()
+    try:
+        yield
+    finally:
+        del inflight[key]
+        finished.set()
+
+
 async def lookup(
     deps: Deps,
+    principals: list[str],
     key: str,
     fp: str,
     question: str,
     request_id: str,
     timings: dict[str, float],
 ) -> tuple[CachedAnswer | None, str, list[float] | None]:
-    """Steps 5 to 7: a cached answer and its tier, and the query vector if it was computed."""
+    """Steps 5 to 7: a valid cached answer and its tier, and the query vector if it was
+    computed."""
+    reader = CacheReader(deps.redis, deps.qdrant, deps.pg, deps.settings, principals, request_id)
     with timed(timings, "exact_cache"):
-        cached = await exact_cache(deps.redis, key)
+        cached = await exact_cache(reader, key)
     if cached is not None:
         return cached, "exact", None
     with timed(timings, "embed"):
         vector = await embed(deps.embedder, question)
     with timed(timings, "semantic_cache"):
-        cached = await semantic_cache(
-            deps.redis, deps.qdrant, deps.settings, vector, fp, question, request_id
-        )
+        cached = await semantic_cache(reader, vector, fp, question)
     return cached, "semantic" if cached else "none", vector
 
 
@@ -201,6 +225,7 @@ async def answer(
     outcome.answer = "".join(pieces)
     outcome.context = context
     outcome.doc_ids = sorted({p.doc_id for p in context.parents})
+    outcome.doc_versions = {p.doc_id: p.version for p in context.parents}
     with timed(spent, "closing"):
         closing = closing_events(outcome.answer, context.parents)
     timings["generate"] = round(spent["generate"], 3)
@@ -264,7 +289,7 @@ async def store_in_caches(
     request_id: str,
 ) -> None:
     """Write a cacheable answer to the caches; a failure is only logged, the answer is sent."""
-    cached = CachedAnswer(outcome.answer, outcome.citations, outcome.doc_ids)
+    cached = CachedAnswer(outcome.answer, outcome.citations, outcome.doc_ids, outcome.doc_versions)
     try:
         await write_caches(
             deps.redis, deps.qdrant, deps.settings, key, fp, question, vector, cached
@@ -273,32 +298,22 @@ async def store_in_caches(
         log("cache_write_failed", request_id=request_id, error=repr(exc))
 
 
-async def ask(
+async def respond(
     deps: Deps,
     caller: Caller,
     principals: list[str],
     fp: str,
     session_id: str,
     question: str,
+    rewritten: str | None,
+    key: str,
     request_id: str,
     timings: dict[str, float],
+    outcome: Outcome,
 ) -> AsyncIterator[Event]:
-    """Steps 4 to 16 for an authenticated, guarded question, as server-sent events."""
-    outcome = Outcome()
-    with timed(timings, "rewrite"):
-        rewritten = await rewrite(
-            deps.pg,
-            deps.llm,
-            deps.settings,
-            caller.user_id,
-            session_id,
-            question,
-            outcome.degraded,
-            request_id,
-        )
+    """Steps 5 to 16 for the standalone question, as server-sent events."""
     query = rewritten or question
-    key = cache_key(query, fp, deps.settings.index_version)
-    cached, tier, vector = await lookup(deps, key, fp, query, request_id, timings)
+    cached, tier, vector = await lookup(deps, principals, key, fp, query, request_id, timings)
     outcome.cache_tier = tier
     if cached is not None:
         for event in replay(cached, outcome):
@@ -335,3 +350,46 @@ async def ask(
     # Step 16: the caches are written after the last event has been sent.
     if outcome.cacheable and vector is not None:
         await store_in_caches(deps, key, fp, query, vector, outcome, request_id)
+
+
+async def ask(
+    deps: Deps,
+    caller: Caller,
+    principals: list[str],
+    fp: str,
+    session_id: str,
+    question: str,
+    request_id: str,
+    timings: dict[str, float],
+) -> AsyncIterator[Event]:
+    """Steps 4 to 16 for an authenticated, guarded question, as server-sent events; identical
+    concurrent questions wait for the first one's cached answer."""
+    outcome = Outcome()
+    with timed(timings, "rewrite"):
+        rewritten = await rewrite(
+            deps.pg,
+            deps.llm,
+            deps.settings,
+            caller.user_id,
+            session_id,
+            question,
+            outcome.degraded,
+            request_id,
+        )
+    key = cache_key(rewritten or question, fp, deps.settings.index_version)
+    async with coalesced(deps.inflight, key, deps.settings.llm_timeout_s, timings):
+        events = respond(
+            deps,
+            caller,
+            principals,
+            fp,
+            session_id,
+            question,
+            rewritten,
+            key,
+            request_id,
+            timings,
+            outcome,
+        )
+        async for event in events:
+            yield event

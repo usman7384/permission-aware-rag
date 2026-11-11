@@ -107,19 +107,25 @@ def test_query_log_is_skewed_towards_the_first_intents_and_repeatable() -> None:
     assert {q.text for q in log if q.intent == 20} == {"It is false that claim 0."}
 
 
-def test_replay_counts_exact_semantic_false_hits_and_missed_reuse() -> None:
+def test_replay_counts_hits_and_a_similar_negation_is_a_miss() -> None:
     first, asked, negation = "Alpha beta", "Is it true that alpha beta?", "It is false that alpha"
+    other = "Alpha beta delta"
     log = [Logged(first, 0), Logged("alpha beta.", 0), Logged(asked, 0), Logged(negation, 1)]
-    similarity = defaultdict(lambda: 0.5, {(first, asked): 0.97, (first, negation): 0.98})
-    assert replay(log, similarity, 0.95) == {
-        "hit_rate": 0.75,
-        "exact": 0.25,
-        "semantic": 0.5,
-        "false_hits": 0.25,
-        "missed_reuse": 0.0,
-    }
+    log.append(Logged(other, 2))
+    similarity = defaultdict(
+        lambda: 0.5, {(first, asked): 0.97, (first, negation): 0.98, (first, other): 0.985}
+    )
+    assert replay(log, similarity, 0.95) == pytest.approx(
+        {
+            "hit_rate": 0.6,
+            "exact": 0.2,
+            "semantic": 0.4,
+            "false_hits": 0.2,
+            "missed_reuse": 0.0,
+        }
+    )
     strict = replay(log, similarity, 0.99)
-    assert strict["hit_rate"] == strict["exact"] == strict["missed_reuse"] == 0.25
+    assert strict["hit_rate"] == strict["exact"] == strict["missed_reuse"] == 0.2
     assert strict["false_hits"] == 0.0
 
 

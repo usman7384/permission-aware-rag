@@ -44,7 +44,7 @@ async def ranked_by_variant(
     with pipeline.timed(timings, "embed"):
         vector = await pipeline.embed(deps.embedder, question.question)
     with pipeline.timed(timings, "dense"):
-        dense_hits = await dense(deps.qdrant, deps.redis, s, vector, principals)
+        dense_hits = await dense(deps.qdrant, deps.redis, s, vector, principals, request_id)
     with pipeline.timed(timings, "sparse"):
         sparse_hits = await sparse(deps.opensearch, deps.redis, s, question.question, principals)
     fused = {"sparse": [sparse_hits], "dense": [dense_hits], "hybrid": [dense_hits, sparse_hits]}

@@ -4,6 +4,7 @@ from uuid import UUID
 from psycopg import AsyncConnection
 
 from rag.common import pg
+from rag.common.keys import CHANGES_STREAM, tuple_event
 
 ROOT_FOLDER = "_root"
 
@@ -39,3 +40,13 @@ async def readable_docs(
     if not doc_ids:
         return set()
     return await pg.select_readable_docs(conn, principals, doc_ids)
+
+
+async def change_tuple(
+    conn: AsyncConnection, op: str, subject: str, relation: str, obj: str
+) -> None:
+    """Add or remove the tuple and record its change event in the same transaction."""
+    async with conn.transaction():
+        write = pg.insert_tuple if op == "add" else pg.delete_tuple
+        await write(conn, subject, relation, obj)
+        await pg.insert_outbox(conn, CHANGES_STREAM, tuple_event(subject, relation, obj))

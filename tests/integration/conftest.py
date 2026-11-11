@@ -31,6 +31,8 @@ TEST_SETTINGS = Settings(
     model_backend="fake",
     abstain_threshold=1,
     worker_block_ms=100,
+    # Creating collections and payload indexes sometimes takes over 5 s on a busy laptop.
+    store_timeout_s=30,
 )
 # The API reads Settings() from the environment, so point it at the test stores.
 os.environ.update(
@@ -54,7 +56,7 @@ async def _reset_stores(settings: Settings) -> None:
     assert settings.store_prefix == "test_" and settings.redis_url.endswith("/15")
     async with await AsyncConnection.connect(settings.pg_dsn) as conn:
         await conn.execute(
-            "TRUNCATE documents, tuples, api_keys, turns, requests, eval_runs CASCADE"
+            "TRUNCATE documents, tuples, api_keys, turns, requests, eval_runs, outbox CASCADE"
         )
         await seed(conn)
     qdrant = qdrant_.connect(settings)

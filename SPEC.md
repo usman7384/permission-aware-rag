@@ -81,6 +81,7 @@ rag-laptop/
 │   │   ├── main.py            # consumer loops
 │   │   ├── watch.py  parse.py  chunk.py  contextualize.py
 │   │   ├── index.py  invalidate.py
+│   │   ├── relay.py           # outbox relay
 │   └── evals/
 │       ├── golden.jsonl
 │       ├── score.py
@@ -146,9 +147,10 @@ All settings are environment variables read by `rag/common/config.py`.
 | `DENSE_TOP_K` / `SPARSE_TOP_K` | `100` / `100` | Candidates per branch |
 | `RRF_K` | `60` | RRF constant |
 | `FUSED_KEEP` / `RERANK_KEEP` | `50` / `10` | Candidates after fusion and after reranking |
+| `EXACT_SCAN_MAX_CHUNKS` | `2000` | The dense branch scans exactly when the user can read at most this many chunks (section 8.6) |
 | `ABSTAIN_THRESHOLD` | `0.0` | Abstain when the top rerank score is below this; tune on the golden set |
 | `CONTEXT_TOKEN_BUDGET` | `6000` | Maximum context tokens |
-| `SEMANTIC_CACHE_THRESHOLD` | `0.96` | Minimum cosine similarity for a tier-2 hit |
+| `SEMANTIC_CACHE_THRESHOLD` | `0.98` | Minimum cosine similarity for a tier-2 hit (`0.96` before Phase 3) |
 | `ANSWER_TTL_S` / `CHUNK_TTL_S` | `3600` / `86400` | Cache TTLs |
 | `HISTORY_TURNS` | `4` | Turns passed to the rewriter |
 | `MAX_QUESTION_CHARS` | `2000` | Input limit |
@@ -158,6 +160,7 @@ All settings are environment variables read by `rag/common/config.py`.
 | `LLM_TIMEOUT_S` | `30` | LLM call |
 | `FAULT_SLOW_MS` | `5000` | Delay injected in `slow` mode |
 | `MAX_DELIVERIES` | `3` | Ingestion attempts before dead-lettering |
+| `OUTBOX_POLL_MS` / `OUTBOX_BATCH` | `200` / `100` | Relay pause when the outbox is empty; events published per relay transaction (section 9.4) |
 | `PG_DSN`, `REDIS_URL`, `QDRANT_URL`, `OPENSEARCH_URL` | local Compose defaults | Store addresses |
 
 ## 6. Data model
@@ -251,12 +254,25 @@ CREATE TABLE eval_runs (
 );
 ```
 
+Phase 3 adds `migrations/002_outbox.sql`, the transactional outbox (section 9.4):
+
+```sql
+CREATE TABLE outbox (
+  id           BIGSERIAL PRIMARY KEY,
+  stream       TEXT NOT NULL,          -- e.g. 'events:changes'
+  payload      JSONB NOT NULL,         -- the stream entry's fields
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ
+);
+CREATE INDEX outbox_unpublished ON outbox(id) WHERE published_at IS NULL;
+```
+
 ### 6.3 Qdrant
 
 | Collection | Point ID | Vector | Payload |
 | --- | --- | --- | --- |
 | `chunks_{INDEX_VERSION}` | `chunk_id` | 384-dim, cosine | `chunk_id`, `parent_id`, `doc_id`, `version` (int), `principals` (list of strings) |
-| `answer_cache_{INDEX_VERSION}` | UUID5 of the cache key | 384-dim, cosine | `cache_key`, `fingerprint`, `entities` (sorted list), `doc_ids` (list) |
+| `answer_cache_{INDEX_VERSION}` | UUID5 of the cache key | 384-dim, cosine | `cache_key`, `fingerprint`, `entities` (sorted list), `negations` (sorted list), `doc_ids` (list) |
 
 Create keyword payload indexes on `principals` and `doc_id` in the chunks collection, and on `fingerprint` and `doc_ids` in the cache collection.
 
@@ -277,8 +293,8 @@ One index, `chunks_{INDEX_VERSION}`, document ID = `chunk_id`.
 | --- | --- | --- | --- |
 | `ingest:jobs` | Stream, consumer group `workers` | none | `{job_id, op: upsert\|delete, path}` |
 | `ingest:dead` | Stream | none | The failed job plus `error` and `deliveries` |
-| `events:changes` | Stream, consumer group `invalidators` | none | Change events (section 9.3) |
-| `ans:{cache_key}` | String (JSON) | `ANSWER_TTL_S` | `{answer, citations, doc_ids}` |
+| `events:changes` | Stream, consumer group `invalidators` | none | Change events (section 9.3), written only by the outbox relay (section 9.4) |
+| `ans:{cache_key}` | String (JSON) | `ANSWER_TTL_S` | `{answer, citations, doc_ids, doc_versions}`; `doc_versions` is `{doc_id: version}` for every document in the context |
 | `chunk:{parent_id}` | String (JSON) | `CHUNK_TTL_S` | `{doc_id, version, path, heading, text}` |
 | `doc2ans:{doc_id}` | Set | `ANSWER_TTL_S`, refreshed on write | Cache keys whose context used this document |
 | `rl:{key_hash}:{epoch_minute}` | Counter | 120 s | Requests in that minute |
@@ -344,10 +360,10 @@ WHERE t.relation = 'viewer' ORDER BY t.subject;
 | 2 | `expand` | `expand_principals(user)`, then `fingerprint`. |
 | 3 | `input_guard` | Reject with HTTP 400 and a code: `too_long` (over `MAX_QUESTION_CHARS`), `injection` (matches a pattern in section 8.1), `pii` (matches an email address or a 13 to 19 digit number). |
 | 4 | `rewrite` | If the session has earlier turns, call the small LLM with `prompts/rewrite_v1.txt` and the last `HISTORY_TURNS` turns to produce a standalone question. Otherwise use the question unchanged. On LLM failure, use the question unchanged and add `rewrite` to `degraded`. |
-| 5 | `exact_cache` | `cache_key = sha256(normalize_query(q) + "|" + fingerprint + "|" + INDEX_VERSION)`. `GET ans:{cache_key}`. Hit: `cache_tier = exact`. |
+| 5 | `exact_cache` | `cache_key = sha256(normalize_query(q) + "|" + fingerprint + "|" + INDEX_VERSION)`. `GET ans:{cache_key}`. A found entry is served only if it passes hit validation (section 8.5). Hit: `cache_tier = exact`. |
 | 6 | `embed` | `Embedder.embed_query` on the rewritten question. |
-| 7 | `semantic_cache` | Search `answer_cache` for the nearest point with payload `fingerprint` equal to the user's. It is a hit only if similarity ≥ `SEMANTIC_CACHE_THRESHOLD`, the stored `entities` equal `extract_entities(q)`, and `ans:{cache_key}` still exists. If the key has expired, delete the point and treat as a miss. Hit: `cache_tier = semantic`. |
-| 8 | `retrieve` | Run `dense` (Qdrant, filter `principals` match-any, limit `DENSE_TOP_K`) and `sparse` (OpenSearch, `match` on `text`, `terms` filter on `principals`, size `SPARSE_TOP_K`) concurrently, each under `RETRIEVE_TIMEOUT_MS`. A branch that fails or times out contributes nothing and adds `dense` or `sparse` to `degraded`. If both fail: `error` event with code `retrieval_unavailable`. |
+| 7 | `semantic_cache` | Search `answer_cache` for the nearest point with payload `fingerprint` equal to the user's. It is a hit only if similarity ≥ `SEMANTIC_CACHE_THRESHOLD`, the stored `entities` equal `extract_entities(q)`, the stored `negations` equal `negation_markers(q)`, and `ans:{cache_key}` still exists and passes hit validation (section 8.5). If the key has expired or fails validation, delete the point and treat as a miss. Hit: `cache_tier = semantic`. |
+| 8 | `retrieve` | Run `dense` (Qdrant, filter `principals` match-any, limit `DENSE_TOP_K`, planned as in section 8.6) and `sparse` (OpenSearch, `match` on `text`, `terms` filter on `principals`, size `SPARSE_TOP_K`) concurrently, each under `RETRIEVE_TIMEOUT_MS`. A branch that fails or times out contributes nothing and adds `dense` or `sparse` to `degraded`. If both fail: `error` event with code `retrieval_unavailable`. |
 | 9 | `rrf` | `score(c) = Σ 1 / (RRF_K + rank)` over the branches that returned `c`, ranks starting at 1. Sort by score descending, ties by `chunk_id`. Keep `FUSED_KEEP`. |
 | 10 | `recheck` | Drop candidates whose document is deleted, whose `version` differs from `documents.version`, or whose `doc_id` is not in `readable_docs(principals, candidate_doc_ids)`. |
 | 11 | `rerank` | Score each remaining candidate's text against the question under `RERANK_TIMEOUT_MS`; keep the top `RERANK_KEEP`. On failure or timeout keep the fused order and add `rerank` to `degraded`. |
@@ -371,6 +387,7 @@ Context block format inside the user text:
 
 - `normalize_query(q)`: Unicode NFKC, lowercase, collapse whitespace runs to one space, strip, then strip trailing `?`, `!` and `.`.
 - `extract_entities(q)`: the sorted set of lowercase tokens (split on non-alphanumerics) that contain a digit or, in the original text, an uppercase letter after the first character of the question.
+- `negation_markers(q)`: the sorted set of negation words in `q` after replacing a contracted `n't` (straight or curly apostrophe) with ` not`: tokens in `{not, no, never, without, except, false, none, nor, neither, cannot}`.
 - Injection patterns, case-insensitive: `ignore (all |any |the )?(previous|prior|above) instructions`, `disregard .{0,40}(rules|instructions)`, `system prompt`, `you are now`.
 
 ### 8.2 Abstaining
@@ -387,7 +404,19 @@ An answer is cacheable when `cache_tier` is `none`, `degraded` is empty, it is n
 
 1. `SET ans:{cache_key}` with `ANSWER_TTL_S`.
 2. For every document in the context (not only the cited ones): `SADD doc2ans:{doc_id} cache_key` and refresh its TTL.
-3. Upsert the query vector into `answer_cache` with payload `cache_key`, `fingerprint`, `entities`, `doc_ids`.
+3. Upsert the query vector into `answer_cache` with payload `cache_key`, `fingerprint`, `entities`, `negations`, `doc_ids`.
+
+The `ans:` value carries `doc_versions`: the version of every context document as it was hydrated.
+
+### 8.5 Cache hit validation and coalescing
+
+Every exact or semantic hit is validated before it is served: every document in `doc_versions` must not be deleted, must still have that version (`documents.version`), and must be in `readable_docs(principals, ...)` for the caller's live principals. An entry that fails, or that has no `doc_versions`, is deleted (its `ans:` key and its `answer_cache` point) and counts as a miss. Cached answers therefore obey live permissions as `recheck` does, and an answer built from a version that changed before the cache write is never served, even if no invalidation event purges it.
+
+Request coalescing: within one API process, a request whose `cache_key` is already being answered waits for that request to end (at most `LLM_TIMEOUT_S`; the wait is timed as `coalesce`), then runs steps 5 to 16 itself, so it normally replays the first answer as an `exact` hit; if the first answer was not cached, it runs its own pipeline. Coalescing is not done across processes.
+
+### 8.6 Dense search plan
+
+Before searching, `dense` counts the chunks whose `principals` match the user's (Qdrant `count`, exact, served from the `principals` payload index). If the count is at most `EXACT_SCAN_MAX_CHUNKS`, the search runs with `exact=True` (a full scan of the filtered points, quantization ignored); otherwise it uses HNSW. The plan and the count are logged per request in a `dense_plan` event (`plan`: `exact` or `hnsw`, `readable_chunks`). The count is part of the `retrieve` timing and of the dense branch's `RETRIEVE_TIMEOUT_MS`.
 
 ## 9. Ingestion path
 
@@ -405,13 +434,12 @@ Read from `ingest:jobs` with consumer group `workers`. For an `upsert` job:
 4. `contextualize` (only when `CONTEXTUAL_CHUNKING=true`): one small-LLM call per parent with `prompts/context_v1.txt`, the document's first 2,000 tokens and the parent, returning at most two sentences. The indexed text of each child is the context, a newline, then the child. Store the context in `parents.context`.
 5. `stamp`: ensure the document's `parent` tuples exist, then `principals = document_readers(doc_id)`.
 6. `index_new`: with `version = old version + 1` (1 for a new file), embed the children and upsert them into Qdrant and OpenSearch.
-7. `commit`: in one Postgres transaction, insert the new parents and update `documents` (hash, version, `deleted_at = NULL`).
-8. `cleanup`: delete chunks with a lower version for this document from Qdrant and OpenSearch, and delete the older parents.
-9. `emit`: add `{type: "doc_changed", doc_ids: [doc_id]}` to `events:changes`, then acknowledge the job.
+7. `commit`: in one Postgres transaction, insert the new parents, update `documents` (hash, version, `deleted_at = NULL`) and insert the outbox event `{type: "doc_changed", doc_ids: [doc_id]}` for `events:changes` (section 9.4).
+8. `cleanup`: delete chunks with a lower version for this document from Qdrant and OpenSearch, and delete the older parents. Then acknowledge the job.
 
 The order of steps 6 to 8 matters: until step 7 commits, the recheck gate hides the new chunks (version mismatch) and serves the old ones; after it commits, the reverse. Readers never see a mix.
 
-A `delete` job sets `deleted_at`, removes the document's chunks and parents and its `parent` tuple, and emits `{type: "doc_deleted", doc_ids: [doc_id]}`.
+A `delete` job, in one Postgres transaction, sets `deleted_at`, removes the document's parents and its `parent` tuple, and inserts the outbox event `{type: "doc_deleted", doc_ids: [doc_id]}`; then it removes the document's chunks from Qdrant and OpenSearch.
 
 Failure handling: a job that raises is not acknowledged. A reclaim loop takes over jobs idle for more than 30 seconds. A job delivered more than `MAX_DELIVERIES` times is copied to `ingest:dead` with the error text and acknowledged.
 
@@ -425,7 +453,11 @@ Read from `events:changes` with consumer group `invalidators`.
 | `tuple_changed` with relation `viewer` or `parent` | Find the affected documents (the document itself, or every document beneath the folder). For each: recompute `document_readers`, overwrite `principals` on its chunks in Qdrant and OpenSearch, then purge as for `doc_changed`. |
 | `tuple_changed` with relation `member` | Nothing. |
 
-TTLs are the backstop if an event is lost.
+Events arrive at least once (section 9.4), so every action is idempotent. Hit validation (section 8.5) keeps a stale or no-longer-readable cached answer from being served before its event is handled; TTLs bound how long it stays in memory.
+
+### 9.4 Outbox relay (`rag/worker/relay.py`)
+
+Nothing writes to `events:changes` directly. Every change event is inserted into `outbox` in the same Postgres transaction as the change it describes (worker `commit`, delete jobs, `/admin/tuples`). A relay loop in the worker, in one Postgres transaction, selects up to `OUTBOX_BATCH` unpublished rows in `id` order with `FOR UPDATE SKIP LOCKED`, `XADD`s each payload to its stream, and sets `published_at`. When it publishes less than a full batch it sleeps `OUTBOX_POLL_MS`. A failed round (Redis or Postgres unreachable) is logged and retried. A crash after `XADD` and before the commit publishes the same events again, so delivery is at-least-once.
 
 ## 10. API contract
 
@@ -453,7 +485,7 @@ Body: `{"request_id": "uuid", "rating": 1 | -1, "comment": "optional"}`. Returns
 
 ### `POST /admin/tuples`
 
-Body: `{"op": "add" | "remove", "subject": "...", "relation": "member|viewer|parent", "object": "..."}`. Writes the tuple and adds `{type: "tuple_changed", subject, relation, object}` to `events:changes`. Returns 204.
+Body: `{"op": "add" | "remove", "subject": "...", "relation": "member|viewer|parent", "object": "..."}`. Writes the tuple and, in the same transaction, the outbox event `{type: "tuple_changed", subject, relation, object}` for `events:changes`. Returns 204.
 
 ### `POST /admin/faults`
 

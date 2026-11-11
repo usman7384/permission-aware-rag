@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from rag.api.cache import semantic_match
 from rag.common.config import Settings
 from rag.common.models import make_embedder
-from rag.common.text import extract_entities, normalize_query
+from rag.common.text import extract_entities, negation_markers, normalize_query
 from rag.evals.benchmark import read_queries
 from rag.evals.experiments import common
 
@@ -67,7 +67,8 @@ def replay(
         if served is None and cached:
             nearest = max(cached, key=lambda c: similarity[c.text, query.text])
             score = similarity[nearest.text, query.text]
-            if semantic_match(score, extract_entities(nearest.text), query.text, threshold):
+            entities, negations = extract_entities(nearest.text), negation_markers(nearest.text)
+            if semantic_match(score, entities, negations, query.text, threshold):
                 served, tier = nearest.intent, "semantic"
         if served is None:
             counts["missed_reuse"] += query.intent in cached_intents

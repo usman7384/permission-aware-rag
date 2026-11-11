@@ -57,9 +57,9 @@ async def test_filtered_search(deps: Deps) -> None:
     args = ["--folders", "6", "--selectivities", "0.5", "0.17", "--queries", "4"]
     lines, metrics = await run(deps, filtered_search, *args, "--exact-max-points", "1")
     assert [round(r["selectivity"], 2) for r in metrics["runs"]] == [0.5, 0.17]
-    assert [r["fallback"] for r in metrics["runs"]] == ["ann", "exact"]
+    assert [r["plan"] for r in metrics["runs"]] == ["hnsw", "exact"]
     assert metrics["runs"][1]["readable_chunks"] == 1
-    assert metrics["runs"][1]["fallback_recall"] == 1.0 and len(lines) == 3
+    assert metrics["runs"][1]["plan_recall"] == 1.0 and len(lines) == 3
 
 
 async def test_model_migration(deps: Deps) -> None:

@@ -20,7 +20,7 @@ from rag.common.migrate import migrate
 from rag.evals.synthetic import Acl, reader_group, synthetic_acl
 from rag.worker.chunk import Parent, chunk
 from rag.worker.contextualize import contextualize
-from rag.worker.index import Deps, chunk_payloads, cleanup, commit, emit, hash_file, stamp
+from rag.worker.index import Deps, chunk_payloads, cleanup, commit, hash_file, stamp
 from rag.worker.main import close_deps, open_deps
 from rag.worker.parse import parse
 
@@ -135,10 +135,9 @@ async def index_batch(deps: Deps, batch: list[Pending]) -> int:
     for item in batch:
         version, parents, contexts = item.version, item.parents, item.contexts
         await commit(deps, item.doc, item.path, item.content_hash, version, parents, contexts)
-        # A first version has nothing older to clean up and no cached answer to purge.
+        # A first version has nothing older to clean up.
         if item.version > 1:
             await cleanup(deps, item.doc, item.version)
-            await emit(deps, "doc_changed", item.doc)
     return len(payloads)
 
 
