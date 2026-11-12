@@ -1,4 +1,4 @@
-# permission-aware-rag
+# rag-from-scratch
 
 A retrieval-augmented generation (RAG) service built from scratch, without LangChain, LlamaIndex or any other RAG framework. It answers questions over a folder of documents with streamed, cited answers. Every user sees only the documents they are allowed to read, and stale or revoked content is never served, even from cache.
 

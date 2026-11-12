@@ -1073,7 +1073,7 @@ wheels = [
 ]
 
 [[package]]
-name = "permission-aware-rag"
+name = "rag-from-scratch"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

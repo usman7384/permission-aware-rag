@@ -1,6 +1,6 @@
 # SPEC.md
 
-The specification for the permission-aware RAG system. Every choice an implementer would otherwise have to make is fixed here. Working rules are in `AGENTS.md`.
+The specification for the RAG system. Every choice an implementer would otherwise have to make is fixed here. Working rules are in `AGENTS.md`.
 
 ## 1. Goal and success checks
 
@@ -45,7 +45,7 @@ Store settings that matter:
 ## 3. Repository layout
 
 ```
-permission-aware-rag/
+rag-from-scratch/
 ├── AGENTS.md  SPEC.md  DECISIONS.md  README.md
 ├── Makefile
 ├── pyproject.toml

@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_deps(deps)
 
 
-app = FastAPI(title="permission-aware-rag", lifespan=lifespan)
+app = FastAPI(title="rag-from-scratch", lifespan=lifespan)
 
 
 @app.exception_handler(ApiError)

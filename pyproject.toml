@@ -1,7 +1,7 @@
 [project]
-name = "permission-aware-rag"
+name = "rag-from-scratch"
 version = "0.1.0"
-description = "Permission-aware retrieval-augmented generation service with hybrid search, safe caching and measured evaluation"
+description = "Production-style RAG built from scratch: hybrid retrieval, permissions, safe caching, outbox and evaluation"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi",

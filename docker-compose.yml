@@ -71,7 +71,7 @@ services:
   api:
     profiles: ["app"]
     build: .
-    image: permission-aware-rag:0.1.0
+    image: rag-from-scratch:0.1.0
     command: ["uvicorn", "rag.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - path: .env
@@ -102,7 +102,7 @@ services:
   worker:
     profiles: ["app"]
     build: .
-    image: permission-aware-rag:0.1.0
+    image: rag-from-scratch:0.1.0
     command: ["python", "-m", "rag.worker.main"]
     env_file:
       - path: .env
@@ -119,7 +119,7 @@ services:
   inference:
     profiles: ["app"]
     build: .
-    image: permission-aware-rag:0.1.0
+    image: rag-from-scratch:0.1.0
     command:
       ["uvicorn", "--factory", "rag.inference.main:app_from_env", "--host", "0.0.0.0", "--port", "8100"]
     env_file:
