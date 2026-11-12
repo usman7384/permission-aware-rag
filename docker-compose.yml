@@ -1,3 +1,4 @@
+name: rag
 services:
   postgres:
     image: postgres:18.6
