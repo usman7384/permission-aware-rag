@@ -19,12 +19,10 @@ INJECTION = re.compile(
 
 
 def tokens(text: str) -> list[str]:
-    """Lowercase alphanumeric runs."""
     return [t.lower() for t in _TOKEN.findall(text)]
 
 
 def sentences(text: str) -> list[str]:
-    """Pieces ending in `.`, `!` or `?` plus whitespace, a line break, or the end of the text."""
     return _SENTENCE.findall(text)
 
 
@@ -34,7 +32,6 @@ def normalize_query(q: str) -> str:
 
 
 def extract_entities(q: str) -> list[str]:
-    """Sorted distinct tokens holding a digit, or an uppercase letter past the question's start."""
     found = set()
     for match in _TOKEN.finditer(q):
         token = match.group()
@@ -45,5 +42,4 @@ def extract_entities(q: str) -> list[str]:
 
 
 def negation_markers(q: str) -> list[str]:
-    """Sorted distinct negation words in the question, counting `n't` as `not`."""
     return sorted(set(tokens(_CONTRACTED_NOT.sub(" not", q))) & NEGATIONS)

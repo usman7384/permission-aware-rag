@@ -13,7 +13,6 @@ Events = list[tuple[str, dict[str, Any]]]
 async def ask(
     client: httpx.AsyncClient, api_key: str, question: str, session_id: str | None = None
 ) -> Events:
-    """The events of one question, in a new session unless `session_id` is given."""
     response = await client.post(
         "/ask",
         json={"session_id": session_id or str(uuid.uuid4()), "question": question},

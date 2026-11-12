@@ -11,7 +11,6 @@ from rag.common.config import Settings
 
 
 def parse_sse(lines: Iterable[str]) -> Iterator[tuple[str, dict[str, Any]]]:
-    """(event, data) pairs from the lines of a `text/event-stream` body."""
     name, data = "message", ""
     for line in lines:
         if line.startswith("event:"):

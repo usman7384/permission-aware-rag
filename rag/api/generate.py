@@ -27,7 +27,6 @@ class Context:
 
 
 def both_ends(ranked: list[ParentHit]) -> list[ParentHit]:
-    """Best first, second best last, third second, fourth second-to-last, and so on."""
     return ranked[0::2] + ranked[1::2][::-1]
 
 
@@ -38,7 +37,6 @@ def assemble(
     count_tokens: Callable[[str], int],
     question: str,
 ) -> Context | None:
-    """The prompt context, or None to abstain."""
     kept = sorted(parents, key=lambda p: -p.score)
     if not kept or (reranked and kept[0].score < settings.abstain_threshold):
         return None
@@ -56,7 +54,6 @@ def assemble(
 
 
 def extractive_fallback(parents: list[ParentHit]) -> str:
-    """The first two sentences of each of the top three parents, with its citation marker."""
     top = sorted(enumerate(parents, start=1), key=lambda pair: -pair[1].score)[:3]
     lines = []
     for n, parent in top:
@@ -69,8 +66,6 @@ def extractive_fallback(parents: list[ParentHit]) -> str:
 async def generate(
     llm: LLM, settings: Settings, context: Context, degraded: list[str], request_id: str
 ) -> AsyncIterator[str]:
-    """Stream the answer; on LLM failure add `llm` to `degraded` and, if nothing came yet,
-    yield the extractive fallback."""
     received = False
     try:
         async with asyncio.timeout(settings.llm_timeout_s):
@@ -90,7 +85,6 @@ async def generate(
 
 
 def clean_sentence(sentence: str, n_blocks: int, context_text: str) -> str:
-    """Drop citation markers outside 1..n_blocks and redact PII that the context lacks."""
 
     def citation(match: re.Match[str]) -> str:
         return match.group(0) if 1 <= int(match.group(1)) <= n_blocks else ""
@@ -102,7 +96,6 @@ def clean_sentence(sentence: str, n_blocks: int, context_text: str) -> str:
 
 
 async def output_guard(pieces: AsyncIterator[str], parents: list[ParentHit]) -> AsyncIterator[str]:
-    """Buffer the stream and release it one cleaned sentence at a time."""
     context_text = "\n".join(p.text for p in parents)
     buffer = ""
     async for piece in pieces:
@@ -117,7 +110,6 @@ async def output_guard(pieces: AsyncIterator[str], parents: list[ParentHit]) -> 
 
 
 def _citations(answer: str, parents: list[ParentHit]) -> list[dict[str, Any]]:
-    """The context blocks cited in a guarded answer, by block number."""
     numbers = sorted({int(n) for n in _CITATION.findall(answer)})
     return [
         {
@@ -131,7 +123,6 @@ def _citations(answer: str, parents: list[ParentHit]) -> list[dict[str, Any]]:
 
 
 def closing_events(answer: str, parents: list[ParentHit]) -> list[Event]:
-    """The `citations` event, then an `uncited` warning if the answer cites no block."""
     items = _citations(answer, parents)
     events: list[Event] = [("citations", {"items": items})]
     if not items:

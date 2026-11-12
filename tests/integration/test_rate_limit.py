@@ -22,7 +22,6 @@ async def test_request_over_the_limit_in_one_minute_returns_429(
     client: httpx.AsyncClient, api_deps: Deps, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(api_deps.settings, "rate_limit_per_min", LIMIT)
-    # Keep all requests inside one epoch minute.
     if time.time() % 60 > 50:
         await asyncio.sleep(60 - time.time() % 60)
     for _ in range(LIMIT):

@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 30
     inference_timeout_ms: int = 10000
     store_timeout_s: float = 5
-    download_timeout_s: float = 120
-    index_wait_timeout_s: float = 600
     fault_slow_ms: int = 5000
     max_deliveries: int = 3
     reclaim_idle_ms: int = 30000

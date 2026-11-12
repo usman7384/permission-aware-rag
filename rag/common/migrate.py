@@ -11,7 +11,6 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
 async def migrate(settings: Settings, job_id: str) -> None:
-    """Apply Postgres migrations, then create the Qdrant collections and OpenSearch index."""
     async with await AsyncConnection.connect(
         settings.pg_dsn, connect_timeout=int(settings.store_timeout_s)
     ) as conn:

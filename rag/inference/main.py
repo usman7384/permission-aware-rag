@@ -11,8 +11,6 @@ from rag.common.models import Embedder, Reranker, local_embedder, local_reranker
 
 
 class Gate:
-    """At most `concurrency` model calls at once and `queue_max` waiting; the rest are refused."""
-
     def __init__(self, concurrency: int, queue_max: int) -> None:
         self.slots = asyncio.Semaphore(concurrency)
         self.limit = concurrency + queue_max
@@ -35,7 +33,6 @@ class Gate:
 
 
 async def run_model[T](request: Request, call: Callable[..., T], *args: object) -> T:
-    """Run one model call in a thread, once the gate admits it."""
     async with request.app.state.gate.enter():
         return await asyncio.to_thread(call, *args)
 
@@ -51,7 +48,6 @@ class RerankRequest(BaseModel):
 
 
 def create_app(settings: Settings, embedder: Embedder, reranker: Reranker) -> FastAPI:
-    """The inference service around the given models."""
     app = FastAPI(title="rag-laptop inference")
 
     def embed_queries(texts: list[str]) -> list[list[float]]:
@@ -78,6 +74,5 @@ def create_app(settings: Settings, embedder: Embedder, reranker: Reranker) -> Fa
 
 
 def app_from_env() -> FastAPI:
-    """The service with the models `MODEL_BACKEND` selects, for `uvicorn --factory`."""
     settings = Settings()
     return create_app(settings, local_embedder(settings), local_reranker(settings))

@@ -20,7 +20,6 @@ def test_ties_break_by_chunk_id() -> None:
 
 
 def test_chunk_in_both_lists_outranks_one_in_a_single_list_at_the_same_rank() -> None:
-    # Both sit at rank 1 of a list; the smaller chunk_id would win a tie.
     fused = rrf([chunks("a-single", "z-both"), chunks("z-both")], k=60, keep=10)
     assert [c.chunk_id for c in fused] == ["z-both", "a-single"]
     assert fused[0].score == pytest.approx(1 / 61 + 1 / 62)

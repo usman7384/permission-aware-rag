@@ -7,7 +7,6 @@ from rag.api.pipeline import Deps
 
 COMPONENTS = ("dense", "sparse", "reranker", "llm")
 FAKE_ANSWER = "Based on the documents, the answer is in [1]."
-# The first two non-heading sentences of specs/api-limits.md, the top parent for QUESTION.
 FALLBACK = (
     "This document describes how the public API protects itself from overload and how client "
     "teams should plan their traffic. The public API allows 120 requests per minute per key."
@@ -25,7 +24,6 @@ async def set_fault(client: httpx.AsyncClient, component: str, mode: str) -> Non
 
 @pytest.fixture
 def short_timeouts(api_deps: Deps, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Shorter reranker and LLM timeouts, so a `slow` fault outlasts every timeout quickly."""
     monkeypatch.setattr(api_deps.settings, "rerank_timeout_ms", 200)
     monkeypatch.setattr(api_deps.settings, "llm_timeout_s", 0.2)
     s = api_deps.settings

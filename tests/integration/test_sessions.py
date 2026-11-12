@@ -9,7 +9,6 @@ SECOND = "And for admin keys?"
 
 
 def spy_rewrites(monkeypatch: pytest.MonkeyPatch, deps: Deps, fail: bool) -> list[str]:
-    """Record the user text of every rewrite call; with `fail`, make those calls raise."""
     calls: list[str] = []
     complete = deps.llm.complete
 

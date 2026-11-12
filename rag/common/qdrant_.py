@@ -33,7 +33,6 @@ async def ping(client: AsyncQdrantClient) -> None:
 
 
 def chunk_vector_params(settings: Settings) -> VectorParams:
-    """Chunk vectors, optionally quantized (kept in RAM) with the originals left on disk."""
     quantization: ScalarQuantization | BinaryQuantization | None = None
     if settings.qdrant_quantization == "int8":
         config = ScalarQuantizationConfig(type=ScalarType.INT8, memory=Memory.PINNED)
@@ -49,7 +48,6 @@ def chunk_vector_params(settings: Settings) -> VectorParams:
 
 
 async def ensure_collections(client: AsyncQdrantClient, settings: Settings) -> None:
-    """Create the chunks and answer-cache collections and their payload indexes if missing."""
     collections = {
         settings.chunks_name: (chunk_vector_params(settings), ["principals", "doc_id"]),
         settings.answer_cache_name: (
@@ -91,7 +89,6 @@ async def delete_chunks(
     lt: int | None = None,
     gte: int | None = None,
 ) -> None:
-    """Delete a document's chunks, optionally only those with version < `lt` or >= `gte`."""
     await client.delete(
         settings.chunks_name, points_selector=_chunk_filter(doc_id, lt, gte), wait=True
     )
@@ -100,7 +97,6 @@ async def delete_chunks(
 async def set_principals(
     client: AsyncQdrantClient, settings: Settings, doc_id: str, principals: list[str]
 ) -> None:
-    """Overwrite `principals` on every chunk of the document, whatever its version."""
     await client.set_payload(
         settings.chunks_name,
         payload={"principals": principals},
@@ -113,7 +109,6 @@ def _readable(principals: list[str]) -> Filter:
     return Filter(must=[FieldCondition(key="principals", match=MatchAny(any=principals))])
 
 
-# A full scan of the original vectors, ignoring the HNSW index and any quantization.
 EXACT = SearchParams(exact=True, quantization=QuantizationSearchParams(ignore=True))
 
 
@@ -125,7 +120,6 @@ async def search_chunks(
     limit: int,
     exact: bool = False,
 ) -> list[dict[str, Any]]:
-    """Payloads of the nearest chunks whose `principals` share at least one of `principals`."""
     response = await client.query_points(
         settings.chunks_name,
         query=vector,
@@ -138,36 +132,15 @@ async def search_chunks(
 
 
 async def count_chunks(client: AsyncQdrantClient, settings: Settings, principals: list[str]) -> int:
-    """The exact number of chunks whose `principals` share at least one of `principals`."""
     response = await client.count(
         settings.chunks_name, count_filter=_readable(principals), exact=True
     )
     return response.count
 
 
-async def scroll_chunks(
-    client: AsyncQdrantClient, settings: Settings, limit: int
-) -> list[tuple[dict[str, Any], list[float]]]:
-    """(payload, vector) of up to `limit` chunks, in point-ID order."""
-    points, offset = [], None
-    while len(points) < limit:
-        batch, offset = await client.scroll(
-            settings.chunks_name,
-            limit=min(1000, limit - len(points)),
-            offset=offset,
-            with_payload=True,
-            with_vectors=True,
-        )
-        points += [(point.payload or {}, point.vector) for point in batch]
-        if offset is None:
-            break
-    return points
-
-
 async def nearest_answer(
     client: AsyncQdrantClient, settings: Settings, vector: list[float], fingerprint: str
 ) -> tuple[str, float, dict[str, Any]] | None:
-    """(point ID, similarity, payload) of the nearest cached answer with this fingerprint."""
     same_user = Filter(
         must=[FieldCondition(key="fingerprint", match=MatchValue(value=fingerprint))]
     )
@@ -198,6 +171,5 @@ async def delete_answer(client: AsyncQdrantClient, settings: Settings, point_id:
 async def delete_answers_of(
     client: AsyncQdrantClient, settings: Settings, doc_ids: list[str]
 ) -> None:
-    """Delete every cached answer whose context used one of the documents."""
     used = Filter(must=[FieldCondition(key="doc_ids", match=MatchAny(any=doc_ids))])
     await client.delete(settings.answer_cache_name, points_selector=used, wait=True)

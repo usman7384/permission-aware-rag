@@ -41,7 +41,6 @@ async def api_error(request: Request, exc: ApiError) -> JSONResponse:
 
 
 async def llm_reachable(settings: Settings) -> None:
-    """Open and close a TCP connection to LLM_BASE_URL; never sends a completion."""
     if settings.model_backend == "fake":
         return
     if not settings.llm_base_url:
@@ -54,7 +53,6 @@ async def llm_reachable(settings: Settings) -> None:
 
 
 async def inference_ready(url: str, timeout_s: float) -> None:
-    """GET the inference service's /healthz; any status but 200 fails."""
     async with httpx.AsyncClient(base_url=url, timeout=timeout_s) as client:
         response = await client.get("/healthz")
         response.raise_for_status()
@@ -136,7 +134,6 @@ async def feedback(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """Store a rating of one of the caller's own requests."""
     deps: Deps = request.app.state.deps
     async with deps.pg.connection() as conn:
         caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)
@@ -162,7 +159,6 @@ async def admin_tuples(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """Write or delete a tuple and, in the same transaction, its event for `events:changes`."""
     deps: Deps = request.app.state.deps
     request_id = str(uuid.uuid4())
     async with deps.pg.connection() as conn:
@@ -185,7 +181,6 @@ async def admin_faults(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """Set or clear the injected fault of one component."""
     deps: Deps = request.app.state.deps
     async with deps.pg.connection() as conn:
         caller = await authenticate(conn, deps.redis, deps.settings, x_api_key)

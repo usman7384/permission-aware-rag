@@ -48,7 +48,6 @@ async def delete_chunks(
     lt: int | None = None,
     gte: int | None = None,
 ) -> None:
-    """Delete a document's chunks, optionally only those with version < `lt` or >= `gte`."""
     conditions: list[dict[str, Any]] = [{"term": {"doc_id": doc_id}}]
     if lt is not None or gte is not None:
         bounds = {k: v for k, v in (("lt", lt), ("gte", gte)) if v is not None}
@@ -64,7 +63,6 @@ async def delete_chunks(
 async def set_principals(
     client: AsyncOpenSearch, settings: Settings, doc_id: str, principals: list[str]
 ) -> None:
-    """Overwrite `principals` on every chunk of the document, whatever its version."""
     body = {
         "query": {"term": {"doc_id": doc_id}},
         "script": {
@@ -80,7 +78,6 @@ async def set_principals(
 async def search_chunks(
     client: AsyncOpenSearch, settings: Settings, text: str, principals: list[str], size: int
 ) -> list[dict[str, Any]]:
-    """BM25 matches on `text` among chunks whose `principals` share one of `principals`."""
     body = {
         "size": size,
         "_source": ["chunk_id", "parent_id", "doc_id", "version"],
@@ -98,24 +95,7 @@ async def search_chunks(
 async def get_texts(
     client: AsyncOpenSearch, settings: Settings, chunk_ids: list[str]
 ) -> dict[str, str]:
-    """Indexed text by chunk_id; chunks no longer in the index are absent."""
     response = await client.mget(
         index=settings.chunks_name, body={"ids": chunk_ids}, _source=["text"]
     )
     return {doc["_id"]: doc["_source"]["text"] for doc in response["docs"] if doc.get("found")}
-
-
-async def scroll_chunks(client: AsyncOpenSearch, settings: Settings) -> list[dict[str, Any]]:
-    """Every indexed chunk: its payload fields and its `text`."""
-    response = await client.search(
-        index=settings.chunks_name, body={"query": {"match_all": {}}}, scroll="2m", size=1000
-    )
-    chunks, scroll_id = [], response["_scroll_id"]
-    try:
-        while hits := response["hits"]["hits"]:
-            chunks += [hit["_source"] for hit in hits]
-            response = await client.scroll(scroll_id=scroll_id, scroll="2m")
-            scroll_id = response["_scroll_id"]
-    finally:
-        await client.clear_scroll(scroll_id=scroll_id)
-    return chunks

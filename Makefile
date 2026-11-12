@@ -1,4 +1,4 @@
-.PHONY: up down migrate seed api worker inference test test-int test-int-context test-int-remote eval bench-load bench-eval lint
+.PHONY: up down migrate seed api worker inference test test-int test-int-context test-int-remote eval lint
 
 up:
 	docker compose up -d --wait
@@ -38,12 +38,6 @@ test-int-remote:
 
 eval:
 	uv run python -m rag.evals.score
-
-bench-load:
-	uv run python -m rag.evals.benchmark
-
-bench-eval:
-	uv run python -m rag.evals.score --benchmark data/beir/scifact --name scifact
 
 lint:
 	uv run ruff check .

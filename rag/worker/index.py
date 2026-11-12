@@ -37,7 +37,6 @@ def hash_file(data: bytes) -> str:
 
 
 async def stamp(conn: AsyncConnection, path: str, doc: UUID) -> list[str]:
-    """Ensure the document's `parent` tuples exist, then return its readers."""
     for subject, relation, obj in parent_tuples(path, doc):
         await pg.insert_tuple(conn, subject, relation, obj)
     return await document_readers(conn, doc)
@@ -74,10 +73,9 @@ async def index_new(
     contexts: list[str | None],
     principals: list[str],
 ) -> int:
-    """Embed the children and write them to Qdrant and OpenSearch; returns the chunk count."""
     s = deps.settings
     payloads, texts = chunk_payloads(doc, version, parents, contexts, principals)
-    # Chunks left by an earlier failed attempt at this version must not survive the commit.
+    # Drop chunks left by an earlier failed attempt at this version.
     await qdrant_.delete_chunks(deps.qdrant, s, str(doc), gte=version)
     await opensearch_.delete_chunks(deps.opensearch, s, str(doc), gte=version)
     if payloads:
@@ -107,7 +105,6 @@ async def commit(
 
 
 async def cleanup(deps: Deps, doc: UUID, version: int) -> None:
-    """Delete the document's chunks and parents older than `version`."""
     await qdrant_.delete_chunks(deps.qdrant, deps.settings, str(doc), lt=version)
     await opensearch_.delete_chunks(deps.opensearch, deps.settings, str(doc), lt=version)
     async with deps.pg.connection() as conn:

@@ -21,7 +21,6 @@ async def change_tuple(
 
 
 async def run_invalidator(deps: Deps) -> None:
-    """Relay the outbox to `events:changes`, then handle every event."""
     await redis_.ensure_group(deps.redis, CHANGES_STREAM, CHANGES_GROUP)
     while await relay.relay_once(deps):
         pass
@@ -37,7 +36,6 @@ async def outbox_rows(deps: Deps) -> int:
 
 
 async def stamped(deps: Deps, path: str) -> set[tuple[str, ...]]:
-    """The distinct `principals` payloads of a document's chunks in Qdrant and OpenSearch."""
     doc = str(doc_id(path))
     condition = Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc))])
     points, _ = await deps.qdrant.scroll(
@@ -55,7 +53,6 @@ async def stamped(deps: Deps, path: str) -> set[tuple[str, ...]]:
 
 
 async def visible(deps: pipeline.Deps, api_key: str) -> set[str]:
-    """Every document that a search for any fixture code word returns for the key."""
     found: set[str] = set()
     for word in CODE_WORDS.values():
         found |= await search_paths(deps, api_key, word)

@@ -17,12 +17,10 @@ class TupleChanged(BaseModel):
 
 
 def changed_node(change: TupleChanged) -> str:
-    """The doc or folder whose readers a `viewer` or `parent` tuple change affects."""
     return change.object if change.relation == "viewer" else change.subject
 
 
 async def purge(deps: Deps, doc_ids: list[str], event_id: str) -> None:
-    """Delete the cached answers whose context used the documents, and their `chunk:` keys."""
     if not doc_ids:
         return
     cache_keys = await redis_.purge_answers(deps.redis, doc_ids)
@@ -32,8 +30,6 @@ async def purge(deps: Deps, doc_ids: list[str], event_id: str) -> None:
 
 
 async def restamp(deps: Deps, node: str, event_id: str) -> list[str]:
-    """Recompute the readers of every live document at or beneath `node` and overwrite them;
-    returns the re-stamped documents."""
     async with deps.pg.connection() as conn:
         docs = await pg.select_live_documents_beneath(conn, node)
         for doc in docs:
@@ -45,7 +41,6 @@ async def restamp(deps: Deps, node: str, event_id: str) -> list[str]:
 
 
 async def handle_change(deps: Deps, message: redis_.Message) -> None:
-    """Act on one change event and acknowledge it; a failed event stays pending for reclaim."""
     event_id, fields = message
     try:
         if fields["type"] in ("doc_changed", "doc_deleted"):
@@ -63,7 +58,6 @@ async def handle_change(deps: Deps, message: redis_.Message) -> None:
 
 
 async def consume_once(deps: Deps, consumer: str) -> int:
-    """Handle the new change events that arrive within one blocking read; returns how many."""
     messages = await redis_.read_new(
         deps.redis, CHANGES_STREAM, CHANGES_GROUP, consumer, deps.settings.worker_block_ms
     )
@@ -73,7 +67,6 @@ async def consume_once(deps: Deps, consumer: str) -> int:
 
 
 async def reclaim_once(deps: Deps, consumer: str) -> int:
-    """Retry change events left unacknowledged for `RECLAIM_IDLE_MS`; returns how many."""
     messages = await redis_.claim_idle(
         deps.redis, CHANGES_STREAM, CHANGES_GROUP, consumer, deps.settings.reclaim_idle_ms
     )

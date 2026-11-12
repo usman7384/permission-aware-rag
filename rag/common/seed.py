@@ -28,7 +28,6 @@ TUPLES = [
 
 
 async def seed(conn: AsyncConnection) -> None:
-    """Load the fixture users, groups, tuples and API keys of spec section 12."""
     async with conn.transaction():
         for key, user_id, is_admin in API_KEYS:
             await pg.upsert_api_key(conn, api_key_hash(key), user_id, is_admin)

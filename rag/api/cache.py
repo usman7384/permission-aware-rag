@@ -24,8 +24,6 @@ class CachedAnswer:
 
 @dataclass(frozen=True)
 class CacheReader:
-    """What a cache lookup needs: the stores and the caller's principals."""
-
     redis: Redis
     qdrant: AsyncQdrantClient
     pg: AsyncConnectionPool
@@ -37,7 +35,6 @@ class CacheReader:
 async def still_valid(
     pool: AsyncConnectionPool, cached: CachedAnswer, principals: list[str]
 ) -> bool:
-    """Every context document is live, at the cached version, and readable by `principals`."""
     docs = sorted(cached.doc_versions)
     async with pool.connection() as conn:
         versions = await pg.live_document_versions(conn, docs)
@@ -46,18 +43,16 @@ async def still_valid(
 
 
 async def drop_entry(reader: CacheReader, cache_key: str) -> None:
-    """Delete a cached answer's `ans:` key and its `answer_cache` point."""
     await reader.redis.delete(answer_key(cache_key))
     point = str(answer_point_id(cache_key))
     await qdrant_.delete_answer(reader.qdrant, reader.settings, point)
 
 
 async def exact_cache(reader: CacheReader, cache_key: str) -> CachedAnswer | None:
-    """The answer cached under the key if it is still valid; an invalid one is dropped."""
     value = await redis_.get_answer(reader.redis, cache_key)
     if value is None:
         return None
-    # An entry written before `doc_versions` existed cannot be checked, so it is dropped.
+    # Entries without `doc_versions` cannot be validated, so they are dropped.
     cached = CachedAnswer(**value) if "doc_versions" in value else None
     if cached is not None and await still_valid(reader.pg, cached, reader.principals):
         return cached
@@ -73,8 +68,6 @@ def semantic_match(
     question: str,
     threshold: float,
 ) -> bool:
-    """Step 7's rule: similar enough, and the same entities and negation words as the cached
-    question."""
     return (
         similarity >= threshold
         and entities == extract_entities(question)
@@ -85,8 +78,6 @@ def semantic_match(
 async def semantic_cache(
     reader: CacheReader, vector: list[float], fingerprint: str, question: str
 ) -> CachedAnswer | None:
-    """The answer cached for the nearest similar question with the same principals, entities
-    and negations; drops the point if its `ans:` key has expired or is no longer valid."""
     nearest = await qdrant_.nearest_answer(reader.qdrant, reader.settings, vector, fingerprint)
     if nearest is None:
         return None
@@ -112,7 +103,6 @@ async def write_caches(
     vector: list[float],
     cached: CachedAnswer,
 ) -> None:
-    """Section 8.4: the `ans:` key, the `doc2ans:` sets, then the `answer_cache` point."""
     await redis_.set_answer(redis, cache_key, asdict(cached), cached.doc_ids, settings.answer_ttl_s)
     payload = {
         "cache_key": cache_key,

@@ -3,7 +3,6 @@ from rag.common.text import INJECTION, PII
 
 
 def input_guard(question: str, max_chars: int) -> None:
-    """Raise a 400 `ApiError` for a question that is too long, an injection attempt or PII."""
     if len(question) > max_chars:
         raise ApiError(400, "too_long", f"the question is longer than {max_chars} characters")
     if INJECTION.search(question):

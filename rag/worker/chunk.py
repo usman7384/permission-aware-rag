@@ -21,7 +21,6 @@ def words(text: str) -> list[str]:
 
 
 def _pack(pieces: list[str], limit: int, count: Counter) -> list[list[str]]:
-    """Group consecutive pieces greedily so each group's text has at most `limit` tokens."""
     groups: list[list[str]] = []
     for piece in pieces:
         if groups and count("".join(groups[-1]) + piece) <= limit:
@@ -34,7 +33,6 @@ def _pack(pieces: list[str], limit: int, count: Counter) -> list[list[str]]:
 def _fit(
     text: str, limit: int, count: Counter, splitters: list[Callable[[str], list[str]]]
 ) -> list[str]:
-    """Split `text` with the coarsest splitter that works into pieces of at most `limit` tokens."""
     if count(text) <= limit or not splitters:
         return [text]
     pieces = [p for piece in splitters[0](text) for p in _fit(piece, limit, count, splitters[1:])]
@@ -44,7 +42,6 @@ def _fit(
 def chunk(
     sections: list[Section], parent_tokens: int, child_tokens: int, count: Counter
 ) -> list[Parent]:
-    """Pack sections into parents and split each parent into children; no text is lost."""
     units = [
         (section.heading, piece)
         for section in sections

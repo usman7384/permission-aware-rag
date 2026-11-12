@@ -23,8 +23,7 @@ class Candidate:
     score: float = 0.0
 
 
-class RetrievalUnavailable(Exception):
-    """Both retrieval branches failed."""
+class RetrievalUnavailable(Exception): ...
 
 
 def _candidate(payload: dict[str, Any]) -> Candidate:
@@ -39,8 +38,6 @@ def _candidate(payload: dict[str, Any]) -> Candidate:
 async def plan_dense(
     client: AsyncQdrantClient, settings: Settings, principals: list[str]
 ) -> tuple[str, int]:
-    """`exact` when the principals can read at most `EXACT_SCAN_MAX_CHUNKS` chunks (a full scan
-    of so few beats a filtered HNSW walk, which loses recall), else `hnsw`; and the count."""
     readable = await qdrant_.count_chunks(client, settings, principals)
     return ("exact" if readable <= settings.exact_scan_max_chunks else "hnsw"), readable
 
@@ -75,7 +72,6 @@ async def sparse(
 async def _branch(
     name: str, call: Awaitable[list[Candidate]], timeout_s: float, request_id: str
 ) -> list[Candidate] | None:
-    """The branch's results, or None if it failed or timed out."""
     try:
         return await asyncio.wait_for(call, timeout_s)
     except Exception as exc:
@@ -93,7 +89,6 @@ async def retrieve(
     principals: list[str],
     request_id: str,
 ) -> tuple[list[list[Candidate]], list[str]]:
-    """Run both branches concurrently; returns the lists that succeeded and the failed names."""
     timeout_s = settings.retrieve_timeout_ms / 1000
     dense_call = dense(qdrant, redis, settings, vector, principals, request_id)
     sparse_call = sparse(opensearch, redis, settings, question, principals)
@@ -108,7 +103,6 @@ async def retrieve(
 
 
 def rrf(branches: list[list[Candidate]], k: int, keep: int) -> list[Candidate]:
-    """Reciprocal rank fusion: sum 1 / (k + rank) per branch, ties broken by chunk_id."""
     scores: dict[str, float] = {}
     chunks: dict[str, Candidate] = {}
     for branch in branches:
@@ -122,7 +116,6 @@ def rrf(branches: list[list[Candidate]], k: int, keep: int) -> list[Candidate]:
 async def recheck(
     conn: AsyncConnection, candidates: list[Candidate], principals: list[str]
 ) -> list[Candidate]:
-    """Drop candidates that are deleted, of a stale version, or no longer readable."""
     doc_ids = sorted({c.doc_id for c in candidates})
     if not doc_ids:
         return []

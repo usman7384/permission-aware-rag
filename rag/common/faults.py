@@ -7,12 +7,10 @@ from rag.common import redis_
 from rag.common.models import LLM
 
 
-class InjectedFault(Exception):
-    """A component was set to `down` through `POST /admin/faults`."""
+class InjectedFault(Exception): ...
 
 
 async def inject(redis: Redis, component: str, slow_ms: int) -> None:
-    """Apply the fault set for the component: raise if `down`, sleep if `slow`, else nothing."""
     mode = await redis_.get_fault(redis, component)
     if mode == "down":
         raise InjectedFault(f"{component} is down (injected fault)")
@@ -21,8 +19,6 @@ async def inject(redis: Redis, component: str, slow_ms: int) -> None:
 
 
 class FaultyLLM:
-    """An LLM whose every call first applies the `llm` fault."""
-
     def __init__(self, llm: LLM, redis: Redis, slow_ms: int) -> None:
         self.llm = llm
         self.redis = redis

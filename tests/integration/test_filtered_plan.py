@@ -1,11 +1,13 @@
+import asyncio
 import json
 import random
 
 import pytest
+from qdrant_client.models import HnswConfigDiff, OptimizersConfigDiff
 
 from rag.api.retrieve import dense, plan_dense
 from rag.common import qdrant_
-from rag.evals.experiments import common
+from rag.common.config import Settings
 from rag.worker.index import Deps
 
 POINTS = 3000
@@ -18,8 +20,7 @@ def unit_vector(rng: random.Random, dim: int) -> list[float]:
     return [x / norm for x in vector]
 
 
-def points(dim: int) -> common.Points:
-    """Random chunks: the first `FEW` readable by `user:few`, the rest by `group:broad`."""
+def points(dim: int) -> list[tuple[dict, list[float]]]:
     rng = random.Random(0)
     found = []
     for i in range(POINTS):
@@ -35,11 +36,33 @@ def points(dim: int) -> common.Points:
     return found
 
 
+async def build_collection(deps: Deps, s: Settings) -> None:
+    await drop_collections(deps, s)
+    await qdrant_.ensure_collections(deps.qdrant, s)
+    await deps.qdrant.update_collection(
+        s.chunks_name,
+        optimizers_config=OptimizersConfigDiff(indexing_threshold=10),
+        hnsw_config=HnswConfigDiff(full_scan_threshold=10),
+    )
+    found = points(s.embed_dim)
+    for first in range(0, len(found), 1000):
+        batch = found[first : first + 1000]
+        await qdrant_.upsert_chunks(deps.qdrant, s, [p for p, _ in batch], [v for _, v in batch])
+    async with asyncio.timeout(600):
+        while (await deps.qdrant.get_collection(s.chunks_name)).status != "green":
+            await asyncio.sleep(0.2)
+
+
+async def drop_collections(deps: Deps, s: Settings) -> None:
+    await deps.qdrant.delete_collection(s.chunks_name)
+    await deps.qdrant.delete_collection(s.answer_cache_name)
+
+
 async def test_few_readable_chunks_are_scanned_exactly_and_many_use_hnsw(
     deps: Deps, capsys: pytest.CaptureFixture[str]
 ) -> None:
     s = deps.settings.model_copy(update={"index_version": "plan"})
-    await common.build_collection(deps.qdrant, s, points(s.embed_dim), threshold_kb=10)
+    await build_collection(deps, s)
     try:
         info = await deps.qdrant.get_collection(s.chunks_name)
         assert info.indexed_vectors_count and info.indexed_vectors_count > POINTS // 2
@@ -62,4 +85,4 @@ async def test_few_readable_chunks_are_scanned_exactly_and_many_use_hnsw(
             ]
             assert plan["plan"] == "exact" and plan["request_id"] == "plan-test"
     finally:
-        await common.drop_collections(deps.qdrant, s)
+        await drop_collections(deps, s)

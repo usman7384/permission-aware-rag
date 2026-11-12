@@ -48,13 +48,11 @@ async def point_exists(deps: pipeline.Deps, key: str) -> bool:
 
 
 async def cached_parent_docs(deps: pipeline.Deps) -> set[str]:
-    """The documents of the parents held in `chunk:` keys."""
     keys = [key async for key in deps.redis.scan_iter(match="chunk:*")]
     return {json.loads(value)["doc_id"] for value in await deps.redis.mget(keys)} if keys else set()
 
 
 def forbid(monkeypatch: pytest.MonkeyPatch, deps: pipeline.Deps) -> None:
-    """Make retrieval and the LLM fail the test if they are called."""
 
     def called(*args: object, **kwargs: object) -> None:
         raise AssertionError("retrieval and the LLM must not be called on a cache hit")
@@ -124,7 +122,7 @@ async def test_one_users_cached_answer_is_never_served_to_another(
 async def test_editing_a_context_document_evicts_its_cached_answer(
     client: httpx.AsyncClient, api_deps: pipeline.Deps, ingested: Deps
 ) -> None:
-    await run_invalidator(ingested)  # drain the events of the initial ingestion
+    await run_invalidator(ingested)
     first = await ask(client, "dev-ana", QUESTION)
     key = await key_for(api_deps, "user:ana", QUESTION)
     edited = str(doc_id("specs/api-limits.md"))
@@ -190,7 +188,6 @@ async def test_answer_cached_before_a_document_changed_is_not_served(
     await redis_.enqueue_job(ingested.redis, "upsert", "specs/api-limits.md")
     while await consume_once(ingested, "test"):
         pass
-    # The invalidator does not run, so the stale entry is still in the cache.
     assert await redis_.get_answer(api_deps.redis, key) is not None
     assert done(await ask(client, "dev-ana", QUESTION))["cache_tier"] == "none"
     assert (await redis_.get_answer(api_deps.redis, key))["doc_versions"][edited] == 2
@@ -209,7 +206,6 @@ async def test_answer_cached_before_access_was_revoked_is_not_served(
     events = await ask(client, "dev-ben", QUESTION)
     assert done(events)["cache_tier"] == "none"
     assert all(c["path"] != "specs/api-limits.md" for c in answer_events(events)[1])
-    # The fresh answer, from the documents ben can still read, replaced the cached one.
     cached = await redis_.get_answer(api_deps.redis, key)
     assert cached is None or str(doc_id("specs/api-limits.md")) not in cached["doc_versions"]
 

@@ -31,8 +31,6 @@ async def _from_postgres(pool: AsyncConnectionPool, parent_ids: list[str]) -> di
 async def hydrate(
     pool: AsyncConnectionPool, redis: Redis, chunk_ttl_s: int, candidates: list[Candidate]
 ) -> list[ParentHit]:
-    """Parents of the candidates, each once with its best child score, best first.
-    Reads `chunk:` keys, falling back to Postgres and caching what it read there."""
     best: dict[str, float] = {}
     for c in candidates:
         best[c.parent_id] = max(best.get(c.parent_id, c.score), c.score)

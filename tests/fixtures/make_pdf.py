@@ -1,5 +1,3 @@
-"""Write `pdf/price-list.pdf`: one heading, one paragraph and one ruled table, byte-identical."""
-
 from pathlib import Path
 
 OUT = Path(__file__).parent / "pdf" / "price-list.pdf"

@@ -27,7 +27,6 @@ TEXTS = ["Access tokens expire after 15 minutes.", "The office closes on 24 Dece
 
 @contextmanager
 def serving(app: FastAPI, port: int) -> Iterator[str]:
-    """Serve the app with uvicorn in a background thread; yields its URL."""
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -41,8 +40,6 @@ def serving(app: FastAPI, port: int) -> Iterator[str]:
 
 
 class BlockingReranker:
-    """Holds every call until `release` is set."""
-
     def __init__(self) -> None:
         self.release = threading.Event()
 
@@ -60,7 +57,6 @@ def fake_service(settings: Settings) -> Iterator[str]:
 
 @pytest.fixture
 def full_service(settings: Settings) -> Iterator[tuple[FastAPI, str]]:
-    """A service with one model slot and no queue, its slot held by a blocked rerank call."""
     one_slot = settings.model_copy(update={"inference_concurrency": 1, "inference_queue_max": 0})
     blocking = BlockingReranker()
     app = create_app(one_slot, FakeEmbedder(settings.embed_dim), blocking)

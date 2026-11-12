@@ -10,13 +10,11 @@ ROOT_FOLDER = "_root"
 
 
 def folder_of(path: str) -> str:
-    """Folder of a corpus-relative path; files directly under CORPUS_DIR are in `_root`."""
     parent = PurePosixPath(path).parent.as_posix()
     return ROOT_FOLDER if parent == "." else parent
 
 
 def parent_tuples(path: str, doc: UUID) -> list[tuple[str, str, str]]:
-    """The document's `parent` tuple and one per nested folder above it."""
     folder = PurePosixPath(folder_of(path))
     found = [(f"doc:{doc}", "parent", f"folder:{folder}")]
     while folder.parent != PurePosixPath("."):
@@ -36,7 +34,6 @@ async def document_readers(conn: AsyncConnection, doc: UUID) -> list[str]:
 async def readable_docs(
     conn: AsyncConnection, principals: list[str], doc_ids: list[str]
 ) -> set[str]:
-    """The subset of `doc_ids` that `principals` may read, from the live tuples."""
     if not doc_ids:
         return set()
     return await pg.select_readable_docs(conn, principals, doc_ids)
@@ -45,7 +42,6 @@ async def readable_docs(
 async def change_tuple(
     conn: AsyncConnection, op: str, subject: str, relation: str, obj: str
 ) -> None:
-    """Add or remove the tuple and record its change event in the same transaction."""
     async with conn.transaction():
         write = pg.insert_tuple if op == "add" else pg.delete_tuple
         await write(conn, subject, relation, obj)

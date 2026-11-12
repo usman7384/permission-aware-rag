@@ -18,7 +18,6 @@ def one_line(text: str) -> str:
 
 
 def rewrite_prompt(turns: list[tuple[str, str]], question: str) -> str:
-    """Turns as `role: text` lines, oldest first, then the `question:` line."""
     lines = [f"{role}: {one_line(text)}" for role, text in turns]
     return "\n".join([*lines, f"question: {one_line(question)}"])
 
@@ -33,7 +32,6 @@ async def rewrite(
     degraded: list[str],
     request_id: str,
 ) -> str | None:
-    """A standalone question from the session's last turns, or None to use the question as is."""
     async with pool.connection() as conn:
         turns = await pg.recent_turns(conn, session_id, user_id, settings.history_turns)
     if not turns:

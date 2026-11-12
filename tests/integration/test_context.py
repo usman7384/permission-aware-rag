@@ -5,7 +5,6 @@ from rag.worker.index import Deps
 
 
 async def indexed_texts(deps: Deps) -> dict[str, tuple[str, str]]:
-    """chunk_id -> (parent_id, indexed text) from OpenSearch."""
     response = await deps.opensearch.search(
         index=deps.settings.chunks_name, body={"query": {"match_all": {}}, "size": 10_000}
     )

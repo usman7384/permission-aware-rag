@@ -12,7 +12,6 @@ CONTEXT_SYSTEM = (Path(__file__).parents[2] / "prompts" / "context_v1.txt").read
 
 
 def head(text: str, limit: int, count: Counter) -> str:
-    """The longest word prefix of `text` with at most `limit` tokens, found by bisection."""
     pieces = words(text)
     low, high = 0, len(pieces)
     while low < high:
@@ -35,7 +34,6 @@ def first_two_sentences(reply: str) -> str:
 async def contextualize(
     llm: LLM, settings: Settings, document: str, parents: list[Parent], count: Counter
 ) -> list[str]:
-    """One small-LLM context of at most two sentences per parent."""
     document_head = head(document, settings.context_doc_tokens, count)
 
     async def one(parent: Parent) -> str:

@@ -18,7 +18,6 @@ class Section(NamedTuple):
 
 
 def _split_before(text: str, starts_piece: Callable[[str, str], bool]) -> list[str]:
-    """Cut `text` before each line where `starts_piece(line, previous_line)`, never in a fence."""
     pieces: list[str] = []
     in_fence = False
     previous = ""
@@ -35,7 +34,6 @@ def _split_before(text: str, starts_piece: Callable[[str, str], bool]) -> list[s
 
 
 def paragraphs(text: str) -> list[str]:
-    """Split on blank lines; a fenced code block or a table stays in one piece."""
     return _split_before(text, lambda line, previous: bool(line.strip()) and not previous.strip())
 
 
@@ -51,8 +49,7 @@ def _markdown_sections(text: str) -> list[Section]:
 
 @cache
 def _pdf_converter() -> "DocumentConverter":
-    """Docling's converter, built once per process because it loads layout and table models."""
-    # Imported here so Markdown-only work never loads docling and its models.
+    # Lazy import: Markdown-only work never loads docling.
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -71,7 +68,6 @@ def pdf_to_markdown(name: str, data: bytes) -> str:
 
 
 def parse(name: str, data: bytes) -> list[Section]:
-    """Sections of a file; Markdown and text sections concatenate back to the file text."""
     if name.endswith(".pdf"):
         return _markdown_sections(pdf_to_markdown(name, data))
     text = data.decode("utf-8")

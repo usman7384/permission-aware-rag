@@ -6,8 +6,6 @@ from rag.worker.index import Deps
 
 
 async def relay_once(deps: Deps) -> int:
-    """Publish the oldest unpublished outbox events to their streams and mark them published,
-    in one Postgres transaction; returns how many. A crash between the two publishes again."""
     async with deps.pg.connection() as conn, conn.transaction():
         rows = await pg.claim_outbox(conn, deps.settings.outbox_batch)
         for _, stream, payload in rows:
@@ -18,7 +16,6 @@ async def relay_once(deps: Deps) -> int:
 
 
 async def relay_loop(deps: Deps) -> None:
-    """Relay events until cancelled; a failed round is logged and retried after a pause."""
     while True:
         try:
             published = await relay_once(deps)

@@ -53,12 +53,10 @@ class Deps:
     embedder: Embedder
     reranker: Reranker
     llm: LLM
-    # Cache keys of the cache misses this process is answering, set when each one ends.
     inflight: dict[str, asyncio.Event] = field(default_factory=dict)
 
 
 async def open_deps(settings: Settings) -> Deps:
-    """Store clients and models; every LLM call goes through the `llm` fault wrapper."""
     redis = redis_.connect(settings)
     return Deps(
         settings=settings,
@@ -92,14 +90,12 @@ class Outcome:
 
     @property
     def cacheable(self) -> bool:
-        """Section 8.4: a fresh, undegraded, cited answer."""
         fresh = self.cache_tier == "none" and not self.degraded
         return fresh and not self.abstained and bool(self.citations)
 
 
 @contextmanager
 def timed(timings: dict[str, float], step: str) -> Iterator[None]:
-    """Record the block's duration in milliseconds under `step`."""
     start = time.perf_counter()
     try:
         yield
@@ -110,7 +106,6 @@ def timed(timings: dict[str, float], step: str) -> Iterator[None]:
 async def timed_pieces(
     pieces: AsyncIterator[str], spent: dict[str, float], step: str
 ) -> AsyncIterator[str]:
-    """Pass the pieces through, adding the milliseconds spent waiting for each to `spent[step]`."""
     spent[step] = 0.0
     while True:
         start = time.perf_counter()
@@ -124,7 +119,6 @@ async def timed_pieces(
 
 
 async def expand(conn: AsyncConnection, user: str) -> tuple[list[str], str]:
-    """The user's principals and their fingerprint."""
     principals = await expand_principals(conn, user)
     return principals, fingerprint(principals)
 
@@ -137,8 +131,6 @@ async def embed(embedder: Embedder, question: str) -> list[float]:
 async def coalesced(
     inflight: dict[str, asyncio.Event], key: str, wait_s: float, timings: dict[str, float]
 ) -> AsyncIterator[None]:
-    """Wait (up to `wait_s`) for an identical request already running in this process, so its
-    cached answer can be replayed; otherwise mark this request as running until the block ends."""
     running = inflight.get(key)
     if running is not None:
         with timed(timings, "coalesce"), suppress(TimeoutError):
@@ -162,8 +154,6 @@ async def lookup(
     request_id: str,
     timings: dict[str, float],
 ) -> tuple[CachedAnswer | None, str, list[float] | None]:
-    """Steps 5 to 7: a valid cached answer and its tier, and the query vector if it was
-    computed."""
     reader = CacheReader(deps.redis, deps.qdrant, deps.pg, deps.settings, principals, request_id)
     with timed(timings, "exact_cache"):
         cached = await exact_cache(reader, key)
@@ -184,7 +174,6 @@ async def search(
     request_id: str,
     timings: dict[str, float],
 ) -> tuple[list[ParentHit], list[str]]:
-    """Steps 8 to 12: the parents the principals may read, best first, and `degraded`."""
     s = deps.settings
     with timed(timings, "retrieve"):
         branches, degraded = await retrieve(
@@ -214,7 +203,6 @@ async def answer(
     timings: dict[str, float],
     outcome: Outcome,
 ) -> AsyncIterator[Event]:
-    """Steps 13 to 15 as events; fills `outcome` with the answer, citations and documents."""
     reranked = "rerank" not in outcome.degraded
     with timed(timings, "assemble"):
         context = assemble(parents, reranked, deps.settings, deps.embedder.count_tokens, question)
@@ -237,7 +225,7 @@ async def answer(
     with timed(spent, "closing"):
         closing = closing_events(outcome.answer, context.parents)
     timings["generate"] = round(spent["generate"], 3)
-    # Waiting on the guard includes waiting on the LLM; the difference is the guard's own work.
+    # Guard time excludes the time spent waiting on the LLM.
     timings["output_guard"] = round(spent["guard"] - spent["generate"] + spent["closing"], 3)
     for name, payload in closing:
         if name == "citations":
@@ -246,7 +234,6 @@ async def answer(
 
 
 def replay(cached: CachedAnswer, outcome: Outcome) -> list[Event]:
-    """The events of a cached answer; fills `outcome` from it."""
     outcome.answer = cached.answer
     outcome.citations = cached.citations
     outcome.doc_ids = cached.doc_ids
@@ -263,8 +250,6 @@ async def persist(
     outcome: Outcome,
     timings: dict[str, float],
 ) -> None:
-    """Store the user and assistant turns and the request row in one transaction, then add
-    the transaction's own duration to the row's timings."""
     async with pool.connection() as conn:
         with timed(timings, "persist"):
             async with conn.transaction():
@@ -296,7 +281,6 @@ async def store_in_caches(
     outcome: Outcome,
     request_id: str,
 ) -> None:
-    """Write a cacheable answer to the caches; a failure is only logged, the answer is sent."""
     cached = CachedAnswer(outcome.answer, outcome.citations, outcome.doc_ids, outcome.doc_versions)
     try:
         await write_caches(
@@ -319,7 +303,6 @@ async def respond(
     timings: dict[str, float],
     outcome: Outcome,
 ) -> AsyncIterator[Event]:
-    """Steps 5 to 16 for the standalone question, as server-sent events."""
     query = rewritten or question
     try:
         cached, tier, vector = await lookup(deps, principals, key, fp, query, request_id, timings)
@@ -360,7 +343,7 @@ async def respond(
             "abstained": outcome.abstained,
         },
     )
-    # Step 16: the caches are written after the last event has been sent.
+    # Caches are written only after the last event is sent.
     if outcome.cacheable and vector is not None:
         await store_in_caches(deps, key, fp, query, vector, outcome, request_id)
 
@@ -375,8 +358,6 @@ async def ask(
     request_id: str,
     timings: dict[str, float],
 ) -> AsyncIterator[Event]:
-    """Steps 4 to 16 for an authenticated, guarded question, as server-sent events; identical
-    concurrent questions wait for the first one's cached answer."""
     outcome = Outcome()
     with timed(timings, "rewrite"):
         rewritten = await rewrite(

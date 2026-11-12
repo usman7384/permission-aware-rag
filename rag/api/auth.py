@@ -9,8 +9,6 @@ from rag.common.keys import api_key_hash
 
 
 class ApiError(Exception):
-    """An error returned before the response stream opens, as plain JSON."""
-
     def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(message)
         self.status = status
@@ -28,8 +26,6 @@ class Caller:
 async def authenticate(
     conn: AsyncConnection, redis: Redis, settings: Settings, api_key: str | None
 ) -> Caller:
-    """Look up the user behind an `X-API-Key` (401 if unknown) and count the request (429 if
-    over the limit)."""
     key_hash = api_key_hash(api_key or "")
     row = await pg.get_api_key(conn, key_hash) if api_key else None
     if row is None:

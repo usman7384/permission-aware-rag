@@ -33,8 +33,6 @@ class LLM(Protocol):
 
 
 class FakeEmbedder:
-    """Hashed bag of words, L2-normalized."""
-
     def __init__(self, dim: int) -> None:
         self.dim = dim
 
@@ -56,10 +54,8 @@ class FakeEmbedder:
 
 
 class SentenceTransformerEmbedder:
-    """A sentence-transformers model with L2-normalized output and a query prefix."""
-
     def __init__(self, model_name: str, query_prefix: str) -> None:
-        # Imported here so the fake backend never loads torch.
+        # Lazy import: the fake backend never loads torch.
         from sentence_transformers import SentenceTransformer
 
         self.model = SentenceTransformer(model_name)
@@ -82,12 +78,10 @@ def local_embedder(settings: Settings) -> Embedder:
     return SentenceTransformerEmbedder(settings.embed_model, settings.embed_query_prefix)
 
 
-class InferenceUnavailable(Exception):
-    """The inference service refused (503), failed or did not answer in time."""
+class InferenceUnavailable(Exception): ...
 
 
 def post_inference(client: httpx.Client, path: str, body: dict[str, Any]) -> Any:
-    """POST to the inference service; any HTTP error or timeout is `InferenceUnavailable`."""
     try:
         response = client.post(path, json=body)
         response.raise_for_status()
@@ -97,10 +91,8 @@ def post_inference(client: httpx.Client, path: str, body: dict[str, Any]) -> Any
 
 
 def token_counter(settings: Settings) -> Callable[[str], int]:
-    """Count tokens in this process, so chunking and assembly never call the service."""
     if settings.model_backend == "fake":
         return FakeEmbedder(settings.embed_dim).count_tokens
-    # Only the tokenizer is loaded, not the model; transformers comes with sentence-transformers.
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(settings.embed_model)
@@ -108,8 +100,6 @@ def token_counter(settings: Settings) -> Callable[[str], int]:
 
 
 class RemoteEmbedder:
-    """The embedder of the inference service at `INFERENCE_URL`."""
-
     def __init__(self, client: httpx.Client, dim: int, count_tokens: Callable[[str], int]) -> None:
         self.client = client
         self.dim = dim
@@ -129,7 +119,6 @@ def inference_client(url: str, timeout_ms: int) -> httpx.Client:
 
 
 def make_embedder(settings: Settings) -> Embedder:
-    """The inference service's embedder when `INFERENCE_URL` is set, else one in this process."""
     if not settings.inference_url:
         return local_embedder(settings)
     client = inference_client(settings.inference_url, settings.inference_timeout_ms)
@@ -137,18 +126,14 @@ def make_embedder(settings: Settings) -> Embedder:
 
 
 class FakeReranker:
-    """Score is the number of distinct query tokens present in the passage."""
-
     def score(self, query: str, passages: list[str]) -> list[float]:
         query_tokens = set(tokens(query))
         return [float(len(query_tokens & set(tokens(p)))) for p in passages]
 
 
 class CrossEncoderReranker:
-    """A sentence-transformers cross-encoder returning raw logits."""
-
     def __init__(self, model_name: str) -> None:
-        # Imported here so the fake backend never loads torch.
+        # Lazy import: the fake backend never loads torch.
         import torch
         from sentence_transformers import CrossEncoder
 
@@ -165,8 +150,6 @@ def local_reranker(settings: Settings) -> Reranker:
 
 
 class RemoteReranker:
-    """The reranker of the inference service at `INFERENCE_URL`."""
-
     def __init__(self, client: httpx.Client) -> None:
         self.client = client
 
@@ -176,14 +159,12 @@ class RemoteReranker:
 
 
 def make_reranker(settings: Settings) -> Reranker:
-    """The inference service's reranker when `INFERENCE_URL` is set, else one in this process."""
     if not settings.inference_url:
         return local_reranker(settings)
     return RemoteReranker(inference_client(settings.inference_url, settings.rerank_timeout_ms))
 
 
 def _rewrite(user: str) -> str:
-    """Join the last `user:` turn line and the `question:` line of a rewrite prompt."""
     lines = user.splitlines()
     previous = [line.removeprefix("user: ") for line in lines if line.startswith("user: ")]
     question = next(
@@ -193,8 +174,6 @@ def _rewrite(user: str) -> str:
 
 
 class FakeLLM:
-    """Replies by the prompt kind named on the first line of `system`."""
-
     async def complete(self, system: str, user: str, *, model: str, max_tokens: int) -> str:
         kind = system.splitlines()[0].removeprefix("KIND:").strip()
         if kind == "answer":
@@ -217,8 +196,6 @@ class FakeLLM:
 
 
 class ChatCompletionsLLM:
-    """An OpenAI-compatible chat-completions endpoint over httpx."""
-
     def __init__(self, base_url: str, api_key: str, timeout_s: float) -> None:
         self.base_url = base_url
         self.headers = {"Authorization": f"Bearer {api_key}"}

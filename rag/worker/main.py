@@ -72,7 +72,6 @@ async def delete(deps: Deps, path: str, job_id: str) -> None:
 
 
 async def handle(deps: Deps, message: redis_.Message) -> None:
-    """Run one job; acknowledge it on success, dead-letter it after its last allowed attempt."""
     message_id, fields = message
     try:
         job = Job.model_validate(fields)
@@ -89,7 +88,6 @@ async def handle(deps: Deps, message: redis_.Message) -> None:
 
 
 async def consume_once(deps: Deps, consumer: str) -> int:
-    """Handle the new jobs that arrive within one blocking read; returns how many."""
     messages = await redis_.read_new(
         deps.redis, JOBS_STREAM, JOBS_GROUP, consumer, deps.settings.worker_block_ms
     )
@@ -99,7 +97,6 @@ async def consume_once(deps: Deps, consumer: str) -> int:
 
 
 async def reclaim_once(deps: Deps, consumer: str) -> int:
-    """Retry jobs left unacknowledged for `RECLAIM_IDLE_MS`; returns how many."""
     messages = await redis_.claim_idle(
         deps.redis, JOBS_STREAM, JOBS_GROUP, consumer, deps.settings.reclaim_idle_ms
     )
@@ -143,7 +140,6 @@ async def close_deps(deps: Deps) -> None:
 
 
 async def run(settings: Settings) -> None:
-    """Reconcile the corpus, then watch it, process jobs and change events until interrupted."""
     deps = await open_deps(settings)
     consumer = socket.gethostname()
     try:

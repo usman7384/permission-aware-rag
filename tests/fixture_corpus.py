@@ -21,7 +21,6 @@ def _in(*folders: str) -> set[str]:
     return {path for path in CODE_WORDS if path.split("/")[0] in folders}
 
 
-# Spec section 12: the documents each fixture API key can read.
 READABLE = {
     "dev-ana": _in("specs", "public"),
     "dev-ben": _in("hr", "public") | {"specs/api-limits.md"},

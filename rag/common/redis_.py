@@ -51,7 +51,6 @@ async def enqueue_job(client: Redis, op: str, path: str) -> str:
 async def read_new(
     client: Redis, stream: str, group: str, consumer: str, block_ms: int
 ) -> list[Message]:
-    """New messages for this consumer; waits up to `block_ms` for one to arrive."""
     reply = await client.xreadgroup(group, consumer, {stream: ">"}, count=1, block=block_ms)
     return [message for _, messages in reply for message in messages]
 
@@ -59,7 +58,6 @@ async def read_new(
 async def claim_idle(
     client: Redis, stream: str, group: str, consumer: str, min_idle_ms: int
 ) -> list[Message]:
-    """Take over pending messages that no consumer has touched for `min_idle_ms`."""
     _, messages, _ = await client.xautoclaim(stream, group, consumer, min_idle_time=min_idle_ms)
     return [(message_id, fields) for message_id, fields in messages if fields]
 
@@ -78,7 +76,6 @@ async def ack(client: Redis, stream: str, group: str, message_id: str) -> None:
 async def dead_letter(
     client: Redis, message_id: str, fields: dict[str, str], error: str, delivered: int
 ) -> None:
-    """Copy the job to `ingest:dead` and acknowledge it, atomically."""
     async with client.pipeline(transaction=True) as pipe:
         pipe.xadd(DEAD_STREAM, {**fields, "error": error, "deliveries": str(delivered)})
         pipe.xack(JOBS_STREAM, JOBS_GROUP, message_id)
@@ -90,7 +87,6 @@ async def publish(client: Redis, stream: str, fields: dict[str, str]) -> None:
 
 
 async def count_request(client: Redis, key_hash: str, ttl_s: int) -> int:
-    """Increment the key's counter for the current minute and return it."""
     key = rate_limit_key(key_hash, int(time.time()) // 60)
     async with client.pipeline(transaction=True) as pipe:
         pipe.incr(key)
@@ -107,7 +103,6 @@ async def get_answer(client: Redis, cache_key: str) -> dict[str, Any] | None:
 async def set_answer(
     client: Redis, cache_key: str, answer: dict[str, Any], doc_ids: list[str], ttl_s: int
 ) -> None:
-    """Write `ans:` and add the key to each document's `doc2ans:` set, refreshing its TTL."""
     async with client.pipeline(transaction=True) as pipe:
         pipe.set(answer_key(cache_key), json.dumps(answer), ex=ttl_s)
         for doc in doc_ids:
@@ -117,7 +112,6 @@ async def set_answer(
 
 
 async def purge_answers(client: Redis, doc_ids: list[str]) -> list[str]:
-    """Delete the `ans:` keys listed in the documents' `doc2ans:` sets, then the sets."""
     cache_keys: set[str] = set()
     for doc in doc_ids:
         cache_keys |= await client.smembers(doc_answers_key(doc))
@@ -127,7 +121,6 @@ async def purge_answers(client: Redis, doc_ids: list[str]) -> list[str]:
 
 
 async def get_parents(client: Redis, parent_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """The cached `chunk:` values of the listed parents that are present."""
     if not parent_ids:
         return {}
     values = await client.mget([chunk_key(parent) for parent in parent_ids])
@@ -146,7 +139,6 @@ async def set_parents(client: Redis, parents: dict[str, dict[str, Any]], ttl_s: 
 
 
 async def delete_parents_of(client: Redis, doc_ids: list[str]) -> int:
-    """Delete every `chunk:` key whose parent belongs to one of the documents; returns how many."""
     keys = [key async for key in client.scan_iter(match=chunk_key("*"))]
     values = await client.mget(keys) if keys else []
     stale = [
@@ -164,7 +156,6 @@ async def get_fault(client: Redis, component: str) -> str | None:
 
 
 async def set_fault(client: Redis, component: str, mode: str) -> None:
-    """Store `slow` or `down` for the component; `ok` deletes the key."""
     if mode == "ok":
         await client.delete(fault_key(component))
     else:

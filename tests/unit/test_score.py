@@ -1,18 +1,14 @@
 import math
-from pathlib import Path
 
 import pytest
 
 from rag.evals.score import (
-    benchmark_questions,
     latency,
     ndcg_at,
     percentile,
     recall_at,
     reciprocal_rank,
 )
-
-BEIR_SAMPLE = Path(__file__).parents[1] / "fixtures" / "beir" / "tiny"
 
 
 def test_recall_counts_expected_paths_in_the_top_k() -> None:
@@ -40,21 +36,7 @@ def test_percentiles_use_the_nearest_rank() -> None:
 def test_ndcg_matches_a_hand_worked_example() -> None:
     relevance = {"a": 2, "b": 1}
     assert ndcg_at(["a", "b", "c"], relevance, 10) == 1.0
-    # DCG = 1/log2(2) + 2/log2(3); ideal DCG = 2/log2(2) + 1/log2(3).
     expected = (1 + 2 / math.log2(3)) / (2 + 1 / math.log2(3))
     assert ndcg_at(["b", "a"], relevance, 10) == pytest.approx(expected)
     assert ndcg_at(["c", "a"], {"a": 1}, 1) == 0.0
     assert ndcg_at(["c"], {}, 10) == 0.0
-
-
-def test_benchmark_questions_keep_loaded_relevant_documents() -> None:
-    paths = ["tiny/f0000/101.txt", "tiny/f0001/102.txt", "tiny/f0000/103.txt"]
-    questions = benchmark_questions(BEIR_SAMPLE, "test", "user:bench", paths, None)
-    assert [(q.id, q.relevance) for q in questions] == [
-        ("q1", {"tiny/f0000/101.txt": 1}),
-        ("q2", {"tiny/f0000/103.txt": 1}),
-        ("q4", {"tiny/f0001/102.txt": 2}),
-    ]
-    assert questions[0].question == "Do glaciers lose mass faster now?"
-    assert questions[0].expected_paths == ["tiny/f0000/101.txt"]
-    assert len(benchmark_questions(BEIR_SAMPLE, "test", "user:bench", paths, 2)) == 2

@@ -28,7 +28,6 @@ CHANGES_GROUP = "invalidators"
 
 
 def doc_event(event_type: str, doc_ids: list[str]) -> dict[str, str]:
-    """The fields of a `doc_changed` or `doc_deleted` event on `events:changes`."""
     return {"type": event_type, "doc_ids": json.dumps(doc_ids)}
 
 

@@ -15,7 +15,6 @@ API_LIMITS = "specs/api-limits.md"
 
 
 async def ingest(deps: Deps) -> None:
-    """Reconcile the corpus and process jobs until the stream is drained."""
     await redis_.ensure_group(deps.redis, JOBS_STREAM, JOBS_GROUP)
     await reconcile(deps.settings, deps.pg, deps.redis)
     while await consume_once(deps, "test"):

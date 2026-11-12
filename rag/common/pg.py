@@ -26,7 +26,6 @@ async def ping(pool: AsyncConnectionPool) -> None:
 
 
 async def apply_migrations(conn: AsyncConnection, directory: Path) -> list[str]:
-    """Run every .sql file in name order; migrations are written to be re-runnable."""
     applied = []
     for path in sorted(directory.glob("*.sql")):
         async with conn.transaction():
@@ -61,7 +60,6 @@ async def upsert_api_key(
 
 
 async def get_document(conn: AsyncConnection, doc_id: UUID) -> tuple[str, int, bool] | None:
-    """(content_hash, version, is_deleted) of a document, or None if it was never ingested."""
     cur = await conn.execute(
         "SELECT content_hash, version, deleted_at IS NOT NULL FROM documents WHERE doc_id = %s",
         (doc_id,),
@@ -84,7 +82,6 @@ async def upsert_document(
 async def insert_parents(
     conn: AsyncConnection, rows: list[tuple[UUID, UUID, int, int, str | None, str | None, str]]
 ) -> None:
-    """Rows are (parent_id, doc_id, version, ordinal, heading, context, text)."""
     async with conn.cursor() as cur:
         await cur.executemany(
             "INSERT INTO parents (parent_id, doc_id, version, ordinal, heading, context, text) "
@@ -96,7 +93,6 @@ async def insert_parents(
 async def delete_parents(
     conn: AsyncConnection, doc_id: UUID, below_version: int | None = None
 ) -> None:
-    """Delete a document's parents, or only those older than `below_version`."""
     await conn.execute(
         "DELETE FROM parents WHERE doc_id = %s AND (%s::int IS NULL OR version < %s::int)",
         (doc_id, below_version, below_version),
@@ -122,7 +118,6 @@ async def live_document_paths(conn: AsyncConnection) -> list[str]:
 
 
 async def select_document_readers(conn: AsyncConnection, obj: str) -> list[str]:
-    """Subjects with `viewer` on `obj` or on any folder above it through `parent` tuples."""
     cur = await conn.execute(
         "WITH RECURSIVE anc(obj) AS ("
         "  SELECT %(doc)s::text"
@@ -138,7 +133,6 @@ async def select_document_readers(conn: AsyncConnection, obj: str) -> list[str]:
 
 
 async def select_live_documents_beneath(conn: AsyncConnection, obj: str) -> list[UUID]:
-    """Live documents that are `obj` or lie beneath it through `parent` tuples."""
     cur = await conn.execute(
         "WITH RECURSIVE below(obj) AS ("
         "  SELECT %(obj)s::text"
@@ -154,7 +148,6 @@ async def select_live_documents_beneath(conn: AsyncConnection, obj: str) -> list
 
 
 async def select_principals(conn: AsyncConnection, user: str) -> list[str]:
-    """The user plus every group reachable through `member` tuples, sorted."""
     cur = await conn.execute(
         "WITH RECURSIVE g(principal) AS ("
         "  SELECT %(user)s::text"
@@ -171,7 +164,6 @@ async def select_principals(conn: AsyncConnection, user: str) -> list[str]:
 async def select_readable_docs(
     conn: AsyncConnection, principals: list[str], doc_ids: list[str]
 ) -> set[str]:
-    """The doc_ids on which one of `principals` is a viewer, directly or through a folder."""
     cur = await conn.execute(
         "WITH RECURSIVE anc(doc_id, obj) AS ("
         "  SELECT d, 'doc:' || d FROM unnest(%(docs)s::uuid[]) AS d"
@@ -187,7 +179,6 @@ async def select_readable_docs(
 
 
 async def live_document_versions(conn: AsyncConnection, doc_ids: list[str]) -> dict[str, int]:
-    """Current version of each listed document that is not deleted."""
     cur = await conn.execute(
         "SELECT doc_id::text, version FROM documents "
         "WHERE doc_id = ANY(%s::uuid[]) AND deleted_at IS NULL",
@@ -197,15 +188,12 @@ async def live_document_versions(conn: AsyncConnection, doc_ids: list[str]) -> d
 
 
 async def insert_outbox(conn: AsyncConnection, stream: str, payload: dict[str, str]) -> None:
-    """Record an event for the relay; call it inside the transaction of the change it describes."""
     await conn.execute(
         "INSERT INTO outbox (stream, payload) VALUES (%s, %s)", (stream, Jsonb(payload))
     )
 
 
 async def claim_outbox(conn: AsyncConnection, limit: int) -> list[tuple[int, str, dict[str, str]]]:
-    """Lock up to `limit` unpublished events (id, stream, payload) in id order, skipping rows
-    another relay holds."""
     cur = await conn.execute(
         "SELECT id, stream, payload FROM outbox WHERE published_at IS NULL "
         "ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED",
@@ -219,7 +207,6 @@ async def mark_outbox_published(conn: AsyncConnection, ids: list[int]) -> None:
 
 
 async def get_api_key(conn: AsyncConnection, key_hash: str) -> tuple[str, bool] | None:
-    """(user_id, is_admin) for a key hash, or None if the key is unknown."""
     cur = await conn.execute(
         "SELECT user_id, is_admin FROM api_keys WHERE key_hash = %s", (key_hash,)
     )
@@ -229,7 +216,6 @@ async def get_api_key(conn: AsyncConnection, key_hash: str) -> tuple[str, bool] 
 async def get_parents(
     conn: AsyncConnection, parent_ids: list[str]
 ) -> list[tuple[str, str, int, str, str | None, str]]:
-    """Rows (parent_id, doc_id, version, path, heading, text) for the listed parents."""
     cur = await conn.execute(
         "SELECT p.parent_id::text, p.doc_id::text, p.version, d.path, p.heading, p.text "
         "FROM parents p JOIN documents d ON d.doc_id = p.doc_id "
@@ -251,7 +237,6 @@ async def insert_turn(
 async def recent_turns(
     conn: AsyncConnection, session_id: str, user_id: str, limit: int
 ) -> list[tuple[str, str]]:
-    """The user's last `limit` turns (role, text) in the session, oldest first."""
     cur = await conn.execute(
         "SELECT role, text FROM ("
         "  SELECT turn_id, role, text FROM turns WHERE session_id = %s AND user_id = %s"
@@ -305,22 +290,9 @@ async def set_request_timings(
     )
 
 
-async def select_request_timings(
-    conn: AsyncConnection, session_prefix: str
-) -> list[tuple[str, list[str], dict[str, float]]]:
-    """Cache tier, `degraded` and timings of the requests whose session ID starts with the
-    prefix."""
-    cur = await conn.execute(
-        "SELECT cache_tier, degraded, timings FROM requests WHERE starts_with(session_id, %s)",
-        (session_prefix,),
-    )
-    return await cur.fetchall()
-
-
 async def insert_feedback(
     conn: AsyncConnection, request_id: str, user_id: str, rating: int, comment: str | None
 ) -> bool:
-    """Store feedback on one of the user's requests; False if there is no such request."""
     cur = await conn.execute(
         "INSERT INTO feedback (request_id, rating, comment) "
         "SELECT request_id, %s, %s FROM requests WHERE request_id = %s AND user_id = %s",
@@ -340,20 +312,9 @@ async def insert_eval_run(
 
 
 async def ensure_database(dsn: str, name: str, timeout_s: float) -> None:
-    """Create the database `name` on the server that `dsn` points to, if it is missing."""
     async with await AsyncConnection.connect(
         dsn, autocommit=True, connect_timeout=int(timeout_s)
     ) as conn:
         cur = await conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
         if await cur.fetchone() is None:
             await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-
-
-async def drop_database(dsn: str, name: str, timeout_s: float) -> None:
-    """Drop the database `name`, closing its connections, on the server that `dsn` points to."""
-    async with await AsyncConnection.connect(
-        dsn, autocommit=True, connect_timeout=int(timeout_s)
-    ) as conn:
-        await conn.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
-        )

@@ -1,6 +1,6 @@
 # SPEC.md
 
-The specification for the laptop RAG system. Every choice an implementer would otherwise have to make is fixed here. Build order is in `TASKS.md`; working rules are in `AGENTS.md`.
+The specification for the laptop RAG system. Every choice an implementer would otherwise have to make is fixed here. Working rules are in `AGENTS.md`.
 
 ## 1. Goal and success checks
 
@@ -33,7 +33,6 @@ Phase 1 is done when all eight checks pass:
 | File watching | `watchfiles` |
 | Tests and lint | `pytest`, `pytest-asyncio`, `ruff` |
 | PDF parsing (milestone 8 only) | `docling`; if it will not install, `pymupdf4llm`. Record the choice in `DECISIONS.md` |
-| Load testing (Phase 2 only) | `locust` |
 
 Container images: `qdrant/qdrant`, `opensearchproject/opensearch`, `postgres`, `redis`. Pin each to the current stable tag when you write `docker-compose.yml`. Check each image's documentation for the pinned tag before writing its environment settings; do not rely on remembered configuration.
 
@@ -47,7 +46,7 @@ Store settings that matter:
 
 ```
 rag-laptop/
-├── AGENTS.md  SPEC.md  TASKS.md  DECISIONS.md  README.md
+├── AGENTS.md  SPEC.md  DECISIONS.md  README.md
 ├── Makefile
 ├── pyproject.toml
 ├── docker-compose.yml
@@ -86,9 +85,7 @@ rag-laptop/
 │   │   └── main.py            # inference service: /embed, /rerank, /healthz, backpressure
 │   └── evals/
 │       ├── golden.jsonl
-│       ├── score.py
-│       ├── loadtest.py
-│       └── experiments/
+│       └── score.py
 └── tests/
     ├── fixtures/corpus/       # the twelve fixture files (section 12)
     ├── unit/
@@ -586,4 +583,4 @@ Print a table and insert one `eval_runs` row with the full configuration and met
 
 ## 14. Out of scope
 
-Do not build: a web front end beyond a minimal page or a CLI client, user sign-up, multi-tenancy, sharding or replication, model fine-tuning, an agent loop, tool calling, or any Phase 2 experiment before Phase 1 is accepted.
+Do not build: a web front end beyond a minimal page or a CLI client, user sign-up, multi-tenancy, sharding or replication, model fine-tuning, an agent loop or tool calling.

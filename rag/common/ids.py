@@ -2,7 +2,6 @@ import uuid
 
 
 def doc_id(path: str) -> uuid.UUID:
-    """ID for a document; `path` is relative to CORPUS_DIR with `/` separators."""
     return uuid.uuid5(uuid.NAMESPACE_URL, path)
 
 
@@ -15,5 +14,4 @@ def chunk_id(doc: uuid.UUID, version: int, parent_ordinal: int, child_ordinal: i
 
 
 def answer_point_id(cache_key: str) -> uuid.UUID:
-    """Qdrant point ID of a cached answer in `answer_cache`."""
     return uuid.uuid5(uuid.NAMESPACE_URL, cache_key)

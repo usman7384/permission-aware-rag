@@ -12,7 +12,6 @@ WATCHED_SUFFIXES = (".md", ".txt", ".pdf")
 
 
 def corpus_files(root: Path) -> list[str]:
-    """Watched files under `root`, as sorted relative paths with `/` separators."""
     return sorted(
         p.relative_to(root).as_posix()
         for p in root.rglob("*")
@@ -26,7 +25,6 @@ async def _enqueue(redis: Redis, op: str, path: str) -> None:
 
 
 async def reconcile(settings: Settings, pool: AsyncConnectionPool, redis: Redis) -> None:
-    """Enqueue an upsert for every file and a delete for every live document whose file is gone."""
     files = corpus_files(Path(settings.corpus_dir).resolve())
     async with pool.connection() as conn:
         live = await pg.live_document_paths(conn)
