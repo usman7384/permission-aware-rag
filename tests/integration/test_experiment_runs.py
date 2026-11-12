@@ -105,6 +105,16 @@ async def test_loadtest(deps: Deps) -> None:
     assert lines[0].split()[:2] == ["users", "stage"] and lines[1].split()[:2] == ["1", "request"]
 
 
+async def test_loadtest_with_the_cache_prober(deps: Deps) -> None:
+    await load_sample(deps)
+    args = ["--users", "1", "--seconds", "2", "--stop-timeout-s", "5", "--port", "8798", "--hits"]
+    lines, metrics = await run(deps, loadtest, *args)
+    level = metrics["users"]["1"]
+    assert level["hit"]["n"] > 0 and level["hit"]["failures"] == 0
+    assert level["request"]["n"] > 0 and level["cache_hits"] >= level["hit"]["n"]
+    assert lines[2].split()[:2] == ["1", "hit"]
+
+
 async def test_cache_behaviour(deps: Deps) -> None:
     args = ["--intents", "4", "--requests", "40", "--thresholds", "0.9", "0.99"]
     lines, metrics = await run(deps, cache_behaviour, *args)

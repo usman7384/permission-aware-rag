@@ -18,5 +18,6 @@ async def test_all_checks_true_with_stores_up(settings: Settings) -> None:
             "qdrant": True,
             "opensearch": True,
             "llm": True,
-        },
+        }
+        | ({"inference": True} if settings.inference_url else {}),
     }

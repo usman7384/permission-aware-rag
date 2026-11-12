@@ -1,6 +1,9 @@
 import os
 import shutil
-from collections.abc import AsyncIterator
+import subprocess
+import sys
+import time
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -42,6 +45,40 @@ os.environ.update(
     MODEL_BACKEND=TEST_SETTINGS.model_backend,
     ABSTAIN_THRESHOLD=str(TEST_SETTINGS.abstain_threshold),
 )
+
+
+def wait_until_serving(url: str, timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            if httpx.get(f"{url}/healthz", timeout=1).status_code == 200:
+                return
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.2)
+    raise TimeoutError(f"{url} did not start serving in {timeout_s} s")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def inference_service() -> Iterator[None]:
+    """With INFERENCE_URL set (make test-int-remote), serve it from a fake-model inference app
+    in a child process for the whole run."""
+    url = TEST_SETTINGS.inference_url
+    if not url:
+        yield
+        return
+    parts = urlsplit(url)
+    env = {k: v for k, v in os.environ.items() if k != "INFERENCE_URL"} | {"MODEL_BACKEND": "fake"}
+    command = [sys.executable, "-m", "uvicorn", "--factory", "rag.inference.main:app_from_env"]
+    command += ["--host", parts.hostname or "", "--port", str(parts.port)]
+    command += ["--log-level", "warning"]
+    server = subprocess.Popen(command, env=env)
+    try:
+        wait_until_serving(url, timeout_s=60)
+        yield
+    finally:
+        server.terminate()
+        server.wait(timeout=30)
 
 
 @pytest.fixture(scope="session")

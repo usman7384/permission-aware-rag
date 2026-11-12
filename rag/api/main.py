@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
+import httpx
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -52,6 +53,13 @@ async def llm_reachable(settings: Settings) -> None:
     await writer.wait_closed()
 
 
+async def inference_ready(url: str, timeout_s: float) -> None:
+    """GET the inference service's /healthz; any status but 200 fails."""
+    async with httpx.AsyncClient(base_url=url, timeout=timeout_s) as client:
+        response = await client.get("/healthz")
+        response.raise_for_status()
+
+
 async def run_check(name: str, check: Awaitable[None], timeout_s: float, request_id: str) -> bool:
     try:
         await asyncio.wait_for(check, timeout_s)
@@ -73,6 +81,8 @@ async def healthz(request: Request) -> JSONResponse:
         "llm": llm_reachable(deps.settings),
     }
     timeout_s = deps.settings.store_timeout_s
+    if deps.settings.inference_url:
+        checks["inference"] = inference_ready(deps.settings.inference_url, timeout_s)
     results = await asyncio.gather(
         *(run_check(name, check, timeout_s, request_id) for name, check in checks.items())
     )

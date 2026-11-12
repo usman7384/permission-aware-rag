@@ -82,6 +82,8 @@ rag-laptop/
 │   │   ├── watch.py  parse.py  chunk.py  contextualize.py
 │   │   ├── index.py  invalidate.py
 │   │   ├── relay.py           # outbox relay
+│   ├── inference/
+│   │   └── main.py            # inference service: /embed, /rerank, /healthz, backpressure
 │   └── evals/
 │       ├── golden.jsonl
 │       ├── score.py
@@ -116,6 +118,8 @@ Real implementations:
 - Embedder: `BAAI/bge-small-en-v1.5`, 384 dimensions, L2-normalized, cosine distance. Queries are prefixed with `EMBED_QUERY_PREFIX`; check the model card for the recommended prefix and record it in `DECISIONS.md`.
 - Reranker: `cross-encoder/ms-marco-MiniLM-L-6-v2`. Scores are raw logits.
 - LLM: an OpenAI-compatible chat-completions endpoint called with `httpx`, configured by `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` and `LLM_SMALL_MODEL`. The `system` string is sent byte-identical on every request of the same kind so the provider can cache it. If the provider needs an explicit cache marker, add it inside the adapter only.
+
+Remote implementations: when `INFERENCE_URL` is set, `make_embedder` and `make_reranker` return clients of the inference service (section 10.1) that satisfy the same protocols; otherwise the models run in-process. Token counting stays in-process (the embedding model's tokenizer, or the fake's tokens). Every remote call has a timeout: `RERANK_TIMEOUT_MS` for `/rerank`, `INFERENCE_TIMEOUT_MS` for `/embed`. A refusal (503), error or timeout raises `InferenceUnavailable`.
 
 Fake implementations (deterministic, no network, no downloads):
 
@@ -159,6 +163,9 @@ All settings are environment variables read by `rag/common/config.py`.
 | `RERANK_TIMEOUT_MS` | `2000` | Reranker |
 | `LLM_TIMEOUT_S` | `30` | LLM call |
 | `FAULT_SLOW_MS` | `5000` | Delay injected in `slow` mode |
+| `INFERENCE_URL` | none | Inference service address (section 10.1); unset runs the models in-process |
+| `INFERENCE_TIMEOUT_MS` | `10000` | Client timeout for `POST /embed` |
+| `INFERENCE_CONCURRENCY` / `INFERENCE_QUEUE_MAX` | `2` / `8` | Inference service: concurrent model calls; calls allowed to wait for one (more get 503) |
 | `MAX_DELIVERIES` | `3` | Ingestion attempts before dead-lettering |
 | `OUTBOX_POLL_MS` / `OUTBOX_BATCH` | `200` / `100` | Relay pause when the outbox is empty; events published per relay transaction (section 9.4) |
 | `PG_DSN`, `REDIS_URL`, `QDRANT_URL`, `OPENSEARCH_URL` | local Compose defaults | Store addresses |
@@ -361,7 +368,7 @@ WHERE t.relation = 'viewer' ORDER BY t.subject;
 | 3 | `input_guard` | Reject with HTTP 400 and a code: `too_long` (over `MAX_QUESTION_CHARS`), `injection` (matches a pattern in section 8.1), `pii` (matches an email address or a 13 to 19 digit number). |
 | 4 | `rewrite` | If the session has earlier turns, call the small LLM with `prompts/rewrite_v1.txt` and the last `HISTORY_TURNS` turns to produce a standalone question. Otherwise use the question unchanged. On LLM failure, use the question unchanged and add `rewrite` to `degraded`. |
 | 5 | `exact_cache` | `cache_key = sha256(normalize_query(q) + "|" + fingerprint + "|" + INDEX_VERSION)`. `GET ans:{cache_key}`. A found entry is served only if it passes hit validation (section 8.5). Hit: `cache_tier = exact`. |
-| 6 | `embed` | `Embedder.embed_query` on the rewritten question. |
+| 6 | `embed` | `Embedder.embed_query` on the rewritten question. If the inference service refuses, fails or times out: `error` event with code `embedding_unavailable`. |
 | 7 | `semantic_cache` | Search `answer_cache` for the nearest point with payload `fingerprint` equal to the user's. It is a hit only if similarity ≥ `SEMANTIC_CACHE_THRESHOLD`, the stored `entities` equal `extract_entities(q)`, the stored `negations` equal `negation_markers(q)`, and `ans:{cache_key}` still exists and passes hit validation (section 8.5). If the key has expired or fails validation, delete the point and treat as a miss. Hit: `cache_tier = semantic`. |
 | 8 | `retrieve` | Run `dense` (Qdrant, filter `principals` match-any, limit `DENSE_TOP_K`, planned as in section 8.6) and `sparse` (OpenSearch, `match` on `text`, `terms` filter on `principals`, size `SPARSE_TOP_K`) concurrently, each under `RETRIEVE_TIMEOUT_MS`. A branch that fails or times out contributes nothing and adds `dense` or `sparse` to `degraded`. If both fail: `error` event with code `retrieval_unavailable`. |
 | 9 | `rrf` | `score(c) = Σ 1 / (RRF_K + rank)` over the branches that returned `c`, ranks starting at 1. Sort by score descending, ties by `chunk_id`. Keep `FUSED_KEEP`. |
@@ -475,7 +482,7 @@ Response: `text/event-stream`. Events, each with a JSON `data` payload:
 | `citations` | `{"items": [{"n": 1, "doc_id": "...", "path": "...", "parent_id": "..."}]}` | Once, after the last token |
 | `warning` | `{"code": "uncited"}` | When the output guard finds no valid citation |
 | `done` | `{"request_id": "...", "cache_tier": "none\|exact\|semantic", "degraded": ["rerank"], "abstained": false}` | Last event on success |
-| `error` | `{"code": "retrieval_unavailable", "message": "..."}` | Last event on failure after the stream opened |
+| `error` | `{"code": "retrieval_unavailable" \| "embedding_unavailable", "message": "..."}` | Last event on failure after the stream opened |
 
 Errors before the stream opens are plain JSON `{"code": "...", "message": "..."}` with status 400 (`too_long`, `injection`, `pii`), 401 (`unauthorized`) or 429 (`rate_limited`).
 
@@ -493,7 +500,19 @@ Body: `{"component": "dense" | "sparse" | "reranker" | "llm", "mode": "ok" | "sl
 
 ### `GET /healthz`
 
-Returns `{"status": "ok" | "degraded", "checks": {"postgres": true, "redis": true, "qdrant": true, "opensearch": true, "llm": true}}`. Status 200 when all are true, 503 otherwise. No API key required. The `llm` check only confirms that `LLM_BASE_URL` accepts a connection; it never sends a completion. With `MODEL_BACKEND=fake` it is always true.
+Returns `{"status": "ok" | "degraded", "checks": {"postgres": true, "redis": true, "qdrant": true, "opensearch": true, "llm": true}}`. Status 200 when all are true, 503 otherwise. No API key required. The `llm` check only confirms that `LLM_BASE_URL` accepts a connection; it never sends a completion. With `MODEL_BACKEND=fake` it is always true. When `INFERENCE_URL` is set, `checks` also has `inference`: the inference service's `GET /healthz` returned 200.
+
+### 10.1 Inference service (`rag/inference/main.py`)
+
+A separate FastAPI app (`make inference`, port 8100; the Compose service `inference` in the `app` profile) that runs the models `MODEL_BACKEND` selects. It has no API key, so it belongs on a private network only.
+
+| Endpoint | Body | Response |
+| --- | --- | --- |
+| `POST /embed` | `{"texts": ["..."], "kind": "query" \| "document"}` | `{"vectors": [[...], ...]}`; `query` applies `EMBED_QUERY_PREFIX` |
+| `POST /rerank` | `{"query": "...", "passages": ["..."]}` | `{"scores": [...]}` |
+| `GET /healthz` | | `{"status": "ok", "admitted": n, "calls": n, "rejected": n}` |
+
+Backpressure: at most `INFERENCE_CONCURRENCY` model calls run at once and at most `INFERENCE_QUEUE_MAX` more wait for a slot. A call beyond that gets 503 at once instead of queueing. In the API, a refused or timed-out `/rerank` is a rerank failure (`degraded: rerank`) and a refused `/embed` is `embedding_unavailable`; in the worker, a failed embed fails the job, which is retried like any other failure (section 9.2).
 
 ## 11. Fault injection (`rag/common/faults.py`)
 
@@ -506,6 +525,8 @@ Expected behaviour under each fault:
 | `dense` or `sparse` down or slow | Answer from the other branch; `degraded` lists the failed branch |
 | Both retrieval branches down | `error` event, `retrieval_unavailable` |
 | `reranker` down or slow | Answer using fused order; `degraded` contains `rerank` |
+| Inference service full, down or slow on `/rerank` | As `reranker` down |
+| Inference service full, down or slow on `/embed` (query path) | `error` event, `embedding_unavailable` |
 | `llm` down or slow | Extractive fallback; `degraded` contains `llm` |
 
 Degraded answers are never cached.

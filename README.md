@@ -19,7 +19,7 @@ A retrieval-augmented generation (RAG) service that runs on one laptop. It answe
   - Linux and macOS: already installed, or from the system package manager (`xcode-select --install` on macOS).
   - Windows: `winget install ezwinports.make`, then run every command below from Git Bash. If `make` is not found, add its folder to `PATH`, for example `export PATH="$LOCALAPPDATA/Microsoft/WinGet/Packages/ezwinports.make_Microsoft.Winget.Source_8wekyb3d8bbwe/bin:$PATH"`.
 - About 3 GB of disk for the Python environment and, on first use, the models: the embedder and reranker (about 200 MB) and the docling layout and table models (about 500 MB, downloaded the first time a PDF is parsed).
-- Free host ports 5432 (Postgres), 6380 (Redis), 6333 and 6334 (Qdrant), 9200 (OpenSearch) and 8000 (API).
+- Free host ports 5432 (Postgres), 6380 (Redis), 6333 and 6334 (Qdrant), 9200 (OpenSearch), 8000 (API) and 8100 (inference service, optional).
 
 ## Run from a fresh clone
 
@@ -59,12 +59,24 @@ docker compose --profile app down
 
 The containers read `.env` but always reach the stores by their Compose service names, watch `./corpus` through a bind mount (with polling, because file events from a host folder do not reach a container on every platform) and keep downloaded models in the `model-cache` volume. Run `make migrate` and `make seed` from the host first. Do not run `make worker` on the host and the worker container at the same time.
 
+### Inference service (optional)
+
+The embedder and the reranker can run in their own process, so model work cannot slow the API's other requests and overload is refused instead of queued:
+
+```
+make inference                            # terminal 3: models on http://127.0.0.1:8100
+INFERENCE_URL=http://127.0.0.1:8100 make api      # and the same for make worker
+```
+
+With `INFERENCE_URL` unset (the default) the models run inside the API and the worker as before. The service runs at most `INFERENCE_CONCURRENCY` model calls at once with `INFERENCE_QUEUE_MAX` more waiting, and answers 503 at once beyond that; the API then answers in fused order with `rerank` in `degraded` (or, if the query cannot be embedded, an `embedding_unavailable` error event). In Compose, the `app` profile starts the `inference` service and points the API and worker containers at it; its port is published on 127.0.0.1 only, because it has no API key.
+
 ## Tests and evaluation
 
 ```
 make test               # unit tests: no services, no network, under 30 seconds
 make test-int           # integration tests against the running stores (make up first)
 make test-int-context   # the same integration tests with CONTEXTUAL_CHUNKING=true
+make test-int-remote    # the same integration tests through a fake-model inference service on port 8101
 make lint               # ruff check and ruff format --check
 make eval               # score the golden set, print the table, store an eval_runs row
 ```
@@ -92,13 +104,14 @@ uv run python -m rag.evals.experiments.model_migration      # second embedder un
 uv run python -m rag.evals.experiments.chunk_size           # 64/128/256-token children, with/without parents
 uv run python -m rag.evals.experiments.contextual_chunking  # with and without chunk context
 uv run python -m rag.evals.experiments.loadtest             # per-stage latency at 1, 2, 4, 8 users (Locust)
+                                                            # --hits: plus one user repeating a cached question
 uv run python -m rag.evals.experiments.cache_behaviour      # cache hit and false-hit rates by threshold
 uv run python -m rag.evals.experiments.freshness            # file change to searchable and to eviction
 uv run python -m rag.evals.experiments.failure_injection    # quality and latency under each fault
 uv run python -m rag.evals.experiments.cost                 # tokens and $ per query by stage and top-k
 ```
 
-`scale_memory` and `filtered_search` copy the benchmark's vectors into scratch Qdrant collections and delete them afterwards. `chunk_size` and `contextual_chunking` index a sample of the corpus into their own databases (`rag_bench_<variant>`) and indexes, deleted after scoring. `model_migration` leaves `bench_chunks_v2` in place. `loadtest` serves the API in its own process on `--port` (default 8765) and drives it with Locust (`rag/evals/loadtest.py`). `freshness` runs the real worker on a temporary folder with its own database and empties the scratch Redis database `--redis-db` (default 1). `failure_injection` sets `fault:` keys in the configured Redis, so do not run it next to an API you are using; it clears them when it ends. `cost` takes prices in dollars per million tokens as arguments. Without `LLM_*` settings, answers, judgements and contexts come from the fake LLM, and the table says so.
+`scale_memory` and `filtered_search` copy the benchmark's vectors into scratch Qdrant collections and delete them afterwards. `chunk_size` and `contextual_chunking` index a sample of the corpus into their own databases (`rag_bench_<variant>`) and indexes, deleted after scoring. `model_migration` leaves `bench_chunks_v2` in place. `loadtest` serves the API in its own process on `--port` (default 8765) and drives it with Locust (`rag/evals/loadtest.py`); run it with `INFERENCE_URL` set and `make inference` running to also see the share of answers degraded by rerank and the service's 503 rate. `freshness` runs the real worker on a temporary folder with its own database and empties the scratch Redis database `--redis-db` (default 1). `failure_injection` sets `fault:` keys in the configured Redis, so do not run it next to an API you are using; it clears them when it ends. `cost` takes prices in dollars per million tokens as arguments. Without `LLM_*` settings, answers, judgements and contexts come from the fake LLM, and the table says so.
 
 `tests/fixtures/make_pdf.py` regenerates the fixture PDF byte for byte (`uv run python tests/fixtures/make_pdf.py`).
 
@@ -110,7 +123,7 @@ uv run python -m rag.evals.experiments.cost                 # tokens and $ per q
 | Redis | `redis:8.10.3` (host port 6380) |
 | Qdrant | `qdrant/qdrant:v1.20.0` |
 | OpenSearch | `opensearchproject/opensearch:3.9.0` |
-| API and worker base | `python:3.12.16-slim-trixie`, with `uv` from `ghcr.io/astral-sh/uv:0.9.13` |
+| API, worker and inference base | `python:3.12.16-slim-trixie`, with `uv` from `ghcr.io/astral-sh/uv:0.9.13` |
 
 ## Results
 

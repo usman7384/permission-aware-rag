@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import csv
 import json
 import subprocess
 import sys
@@ -9,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
 import uvicorn
 
 from rag.api import pipeline
@@ -42,46 +42,92 @@ def stage_percentiles(timings: list[dict[str, float]]) -> dict[str, dict[str, fl
     return result
 
 
-def locust_summary(stats_csv: str) -> dict[str, float]:
-    """Requests, failures, end-to-end percentiles and throughput of the `ask` row of Locust's
-    `_stats.csv`."""
-    row = next(r for r in csv.DictReader(stats_csv.splitlines()) if r["Name"] == "ask")
+def locust_summary(stats_json: str, name: str = "ask") -> dict[str, float]:
+    """Requests, failures, end-to-end percentiles and throughput of the entry `name` of Locust's
+    final `--json-file` stats, whose `response_times` maps rounded milliseconds to counts."""
+    entry = next(e for e in json.loads(stats_json) if e["name"] == name)
+    times = [float(ms) for ms, n in entry["response_times"].items() for _ in range(n)]
+    duration = entry["last_request_timestamp"] - entry["start_time"]
     return {
-        "n": int(row["Request Count"]),
-        "failures": int(row["Failure Count"]),
-        **{f"p{p}": float(row[f"{p}%"]) for p in (50, 95, 99)},
-        "rps": float(row["Requests/s"]),
+        "n": entry["num_requests"],
+        "failures": entry["num_failures"],
+        **{f"p{p}": percentile(times, p) for p in (50, 95, 99)},
+        "rps": entry["num_requests"] / duration if duration > 0 else 0.0,
     }
 
 
-def run_locust(args: argparse.Namespace, users: int, questions: Path, prefix: str) -> str:
-    """Run Locust headless at `users` concurrent users; returns its `_stats.csv`. Locust runs
-    in its own process because it monkey-patches the standard library with gevent."""
+def run_locust(
+    args: argparse.Namespace, users: int, questions: Path, prefix: str, hit_question: str
+) -> str:
+    """Run Locust headless at `users` concurrent askers, plus the prober with `--hits`; returns
+    its final stats as JSON (its `_stats.csv` is only a snapshot taken every second, which a
+    short run can end before any request is in it). Locust runs in its own process because it
+    monkey-patches the standard library with gevent."""
     out = questions.parent / f"u{users}"
-    command = [sys.executable, "-m", "locust", "-f", str(LOCUSTFILE), "--headless"]
-    command += ["--host", f"http://127.0.0.1:{args.port}", "--users", str(users)]
-    command += ["--spawn-rate", str(users), "--run-time", f"{args.seconds}s"]
+    classes = ["Asker", "Prober"] if args.hits else ["Asker"]
+    total = users + len(classes) - 1
+    command = [sys.executable, "-m", "locust", "-f", str(LOCUSTFILE), "--headless", *classes]
+    command += ["--host", f"http://127.0.0.1:{args.port}", "--users", str(total)]
+    command += ["--spawn-rate", str(total), "--run-time", f"{args.seconds}s"]
+    command += ["--hit-question", hit_question]
     command += ["--stop-timeout", f"{args.stop_timeout_s}s", "--exit-code-on-error", "0"]
-    command += ["--csv", str(out), "--only-summary", "--questions", str(questions)]
+    command += ["--json-file", str(out), "--questions", str(questions)]
     command += ["--api-key", API_KEY, "--session-prefix", prefix]
     timeout = args.seconds + args.stop_timeout_s + 60
     subprocess.run(command, check=True, capture_output=True, timeout=timeout)
-    return Path(f"{out}_stats.csv").read_text(encoding="utf-8")
+    return Path(f"{out}.json").read_text(encoding="utf-8")
 
 
 async def level(
-    deps: pipeline.Deps, args: argparse.Namespace, users: int, questions: list[str], folder: Path
+    deps: pipeline.Deps,
+    args: argparse.Namespace,
+    users: int,
+    questions: list[str],
+    hit_question: str,
+    folder: Path,
 ) -> dict[str, Any]:
     """One concurrency level: Locust's end-to-end numbers and the server's per-stage timings."""
     file = folder / f"questions-u{users}.json"
     file.write_text(json.dumps(questions), encoding="utf-8")
     prefix = f"load-{uuid.uuid4().hex[:8]}-u{users}-"
-    stats = await asyncio.to_thread(run_locust, args, users, file, prefix)
+    before = await inference_counts(deps.settings)
+    stats = await asyncio.to_thread(run_locust, args, users, file, prefix, hit_question)
+    after = await inference_counts(deps.settings)
     async with deps.pg.connection() as conn:
         rows = await pg.select_request_timings(conn, prefix)
-    hits = sum(1 for tier, _ in rows if tier != "none")
-    stages = stage_percentiles([t for tier, t in rows if tier == "none"])
-    return {"request": locust_summary(stats), **stages, "cache_hits": hits}
+    full = [(degraded, t) for tier, degraded, t in rows if tier == "none"]
+    result = {"request": locust_summary(stats), **stage_percentiles([t for _, t in full])}
+    result["cache_hits"] = len(rows) - len(full)
+    result["degraded_rerank"] = sum("rerank" in d for d, _ in full) / len(full) if full else 0.0
+    if args.hits:
+        result["hit"] = locust_summary(stats, "hit")
+    if before and after:
+        calls = after["calls"] - before["calls"]
+        result["inference_503"] = (after["rejected"] - before["rejected"]) / calls if calls else 0.0
+    return result
+
+
+async def inference_counts(settings: Settings) -> dict[str, int] | None:
+    """The inference service's call and 503 counters, if `INFERENCE_URL` is set."""
+    if not settings.inference_url:
+        return None
+    async with httpx.AsyncClient(base_url=settings.inference_url, timeout=10) as client:
+        response = await client.get("/healthz")
+        response.raise_for_status()
+        return response.json()
+
+
+async def warm_hit_question(port: int, questions: list[str], tries: int = 10) -> str:
+    """The first question that is cached after one ask (one that is answered, not abstained
+    or degraded), so the prober only sees exact hits."""
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=120) as client:
+        for question in questions[:tries]:
+            for _ in range(2):
+                body = {"session_id": str(uuid.uuid4()), "question": question}
+                response = await client.post("/ask", json=body, headers={"X-API-Key": API_KEY})
+            if '"cache_tier": "exact"' in response.text:
+                return question
+    raise RuntimeError(f"none of the first {tries} questions was cached")
 
 
 async def serve(deps: pipeline.Deps, args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -96,6 +142,9 @@ async def serve(deps: pipeline.Deps, args: argparse.Namespace) -> list[dict[str,
         while not server.started:
             await asyncio.sleep(0.05)
         texts = [q.question for q in await common.labelled_questions(deps.pg, args)]
+        # The prober repeats one cached question, which the levels then leave out.
+        hit_question = await warm_hit_question(args.port, texts) if args.hits else ""
+        texts = [text for text in texts if text != hit_question]
         # Each level asks its own questions, so earlier levels do not warm the answer caches.
         per_level = len(texts) // len(args.users)
         if per_level == 0:
@@ -103,7 +152,7 @@ async def serve(deps: pipeline.Deps, args: argparse.Namespace) -> list[dict[str,
         with tempfile.TemporaryDirectory() as folder:
             slices = [texts[i * per_level : (i + 1) * per_level] for i in range(len(args.users))]
             return [
-                await level(deps, args, users, questions, Path(folder))
+                await level(deps, args, users, questions, hit_question, Path(folder))
                 for users, questions in zip(args.users, slices, strict=True)
             ]
     finally:
@@ -126,15 +175,20 @@ async def experiment(settings: Settings, args: argparse.Namespace) -> str:
     runs = dict(zip(map(str, args.users), levels, strict=True))
     await common.save_run(settings, args, {"llm": llm_used, "users": runs})
     headers = ["users", "stage", "n", "p50_ms", "p95_ms", "p99_ms", "rps", "failures"]
+    headers += ["degraded_rerank", "inference_503"]
     rows = []
     for users, result in zip(args.users, levels, strict=True):
         r = result["request"]
         rows.append([users, "request", r["n"], r["p50"], r["p95"], r["p99"], r["rps"]])
-        rows[-1].append(r["failures"])
+        rows[-1] += [r["failures"], result["degraded_rerank"], result.get("inference_503", "")]
+        if "hit" in result:
+            h = result["hit"]
+            rows.append([users, "hit", h["n"], h["p50"], h["p95"], h["p99"], h["rps"]])
+            rows[-1] += [h["failures"], "", ""]
         for stage in STAGES:
             if stage in result:
                 s = result[stage]
-                rows.append([users, stage, s["n"], s["p50"], s["p95"], s["p99"], "", ""])
+                rows.append([users, stage, s["n"], s["p50"], s["p95"], s["p99"], "", "", "", ""])
     footer = f"\n{args.seconds} s per level, {llm_used} LLM; request = end to end, from Locust"
     return common.table(headers, rows) + footer
 
@@ -146,6 +200,8 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--seconds", type=int, default=15, help="duration of each level")
     parser.add_argument("--stop-timeout-s", type=int, default=30, help="let requests finish")
     parser.add_argument("--port", type=int, default=8765, help="port of the API under load")
+    hits_help = "add one user that repeats a cached question (latency without the models)"
+    parser.add_argument("--hits", action="store_true", help=hits_help)
     return parser
 
 

@@ -82,6 +82,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       OPENSEARCH_URL: http://opensearch:9200
+      INFERENCE_URL: http://inference:8100
     ports:
       - "8000:8000"
     volumes:
@@ -94,6 +95,8 @@ services:
       qdrant:
         condition: service_started
       opensearch:
+        condition: service_healthy
+      inference:
         condition: service_healthy
 
   worker:
@@ -112,6 +115,32 @@ services:
       - ./corpus:/app/corpus
       - model-cache:/root/.cache/huggingface
     depends_on: *app-depends
+
+  inference:
+    profiles: ["app"]
+    build: .
+    image: rag-laptop:0.1.0
+    command:
+      ["uvicorn", "--factory", "rag.inference.main:app_from_env", "--host", "0.0.0.0", "--port", "8100"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # The service runs the models itself, so it never calls another inference service.
+      INFERENCE_URL: ""
+    ports:
+      - "127.0.0.1:8100:8100"
+    volumes:
+      - model-cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 60
 
 volumes:
   pg-data:

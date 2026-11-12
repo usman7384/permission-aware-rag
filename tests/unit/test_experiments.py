@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 import time
 from collections import Counter, defaultdict
@@ -186,17 +187,18 @@ def test_stage_percentiles_skip_requests_without_the_stage() -> None:
     assert stages["generation"]["p50"] == 6.0 and stages["persist"]["n"] == 2
 
 
-def test_locust_summary_reads_the_ask_row() -> None:
-    stats = (
-        '"Type","Name","Request Count","Failure Count","50%","95%","99%","Requests/s"\n'
-        '"POST","ask","12","1","350","900","1200","2.5"\n'
-        '"","Aggregated","12","1","350","900","1200","2.5"\n'
-    )
+def test_locust_summary_reads_the_named_entry() -> None:
+    entry = {"num_requests": 4, "num_failures": 1, "start_time": 100.0}
+    ask = entry | {"name": "ask", "last_request_timestamp": 102.0}
+    ask["response_times"] = {"350": 2, "900": 1, "1200": 1}
+    hit = entry | {"name": "hit", "last_request_timestamp": 100.0, "response_times": {"5": 4}}
+    stats = json.dumps([ask, hit])
     assert locust_summary(stats) == {
-        "n": 12,
+        "n": 4,
         "failures": 1,
         "p50": 350.0,
-        "p95": 900.0,
+        "p95": 1200.0,
         "p99": 1200.0,
-        "rps": 2.5,
+        "rps": 2.0,
     }
+    assert locust_summary(stats, "hit")["p95"] == 5.0 and locust_summary(stats, "hit")["rps"] == 0

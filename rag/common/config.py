@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     qdrant_quantization: Literal["none", "int8", "binary"] = "none"
     qdrant_vectors_on_disk: bool = False
 
+    inference_url: str | None = None
+    inference_concurrency: int = 2
+    inference_queue_max: int = 8
+
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -49,6 +53,7 @@ class Settings(BaseSettings):
     retrieve_timeout_ms: int = 500
     rerank_timeout_ms: int = 2000
     llm_timeout_s: float = 30
+    inference_timeout_ms: int = 10000
     store_timeout_s: float = 5
     download_timeout_s: float = 120
     index_wait_timeout_s: float = 600

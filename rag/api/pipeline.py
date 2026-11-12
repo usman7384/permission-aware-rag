@@ -31,7 +31,15 @@ from rag.common.config import Settings
 from rag.common.faults import FaultyLLM
 from rag.common.keys import cache_key, fingerprint
 from rag.common.log import log
-from rag.common.models import LLM, Embedder, Reranker, make_embedder, make_llm, make_reranker
+from rag.common.models import (
+    LLM,
+    Embedder,
+    InferenceUnavailable,
+    Reranker,
+    make_embedder,
+    make_llm,
+    make_reranker,
+)
 from rag.common.permissions import expand_principals
 
 
@@ -313,7 +321,12 @@ async def respond(
 ) -> AsyncIterator[Event]:
     """Steps 5 to 16 for the standalone question, as server-sent events."""
     query = rewritten or question
-    cached, tier, vector = await lookup(deps, principals, key, fp, query, request_id, timings)
+    try:
+        cached, tier, vector = await lookup(deps, principals, key, fp, query, request_id, timings)
+    except InferenceUnavailable as exc:
+        log("ask_failed", request_id=request_id, code="embedding_unavailable", error=str(exc))
+        yield "error", {"code": "embedding_unavailable", "message": str(exc)}
+        return
     outcome.cache_tier = tier
     if cached is not None:
         for event in replay(cached, outcome):

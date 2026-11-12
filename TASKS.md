@@ -242,10 +242,10 @@ Tests:
 
 #### M11b
 
-- [ ] **Inference service.** New package `rag/inference/` (add to the layout in `SPEC.md` section 3): a FastAPI app with `POST /embed` (`{"texts": [...], "kind": "query" | "document"}`) and `POST /rerank` (`{"query", "passages"}`), and `GET /healthz`. It loads the real or fake models per `MODEL_BACKEND`. It owns backpressure: a bounded number of concurrent model calls (`INFERENCE_CONCURRENCY`) and a bounded wait queue (`INFERENCE_QUEUE_MAX`); when full it returns 503 at once instead of queueing.
-- [ ] The API and worker use remote clients that satisfy the `Embedder` and `Reranker` protocols when `INFERENCE_URL` is set, and in-process models otherwise (tests keep using in-process fakes by default). Every call has a timeout. A 503 or timeout from `/rerank` is a rerank failure (`degraded: rerank`); from `/embed` on the query path it is an error event (choose the code, record it).
-- [ ] `/healthz` on the API gains an `inference` check when `INFERENCE_URL` is set.
-- [ ] `make inference` runs it locally; `docker-compose.yml` gains an `inference` service under the `app` profile; the API and worker containers point at it.
+- [x] **Inference service.** New package `rag/inference/` (add to the layout in `SPEC.md` section 3): a FastAPI app with `POST /embed` (`{"texts": [...], "kind": "query" | "document"}`) and `POST /rerank` (`{"query", "passages"}`), and `GET /healthz`. It loads the real or fake models per `MODEL_BACKEND`. It owns backpressure: a bounded number of concurrent model calls (`INFERENCE_CONCURRENCY`) and a bounded wait queue (`INFERENCE_QUEUE_MAX`); when full it returns 503 at once instead of queueing.
+- [x] The API and worker use remote clients that satisfy the `Embedder` and `Reranker` protocols when `INFERENCE_URL` is set, and in-process models otherwise (tests keep using in-process fakes by default). Every call has a timeout. A 503 or timeout from `/rerank` is a rerank failure (`degraded: rerank`); from `/embed` on the query path it is an error event (choose the code, record it).
+- [x] `/healthz` on the API gains an `inference` check when `INFERENCE_URL` is set.
+- [x] `make inference` runs it locally; `docker-compose.yml` gains an `inference` service under the `app` profile; the API and worker containers point at it.
 
 Tests:
 

@@ -1,7 +1,7 @@
 import hashlib
 import json
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol
 
 import httpx
@@ -76,10 +76,64 @@ class SentenceTransformerEmbedder:
         return len(self.model.tokenizer(text, add_special_tokens=False)["input_ids"])
 
 
-def make_embedder(settings: Settings) -> Embedder:
+def local_embedder(settings: Settings) -> Embedder:
     if settings.model_backend == "fake":
         return FakeEmbedder(settings.embed_dim)
     return SentenceTransformerEmbedder(settings.embed_model, settings.embed_query_prefix)
+
+
+class InferenceUnavailable(Exception):
+    """The inference service refused (503), failed or did not answer in time."""
+
+
+def post_inference(client: httpx.Client, path: str, body: dict[str, Any]) -> Any:
+    """POST to the inference service; any HTTP error or timeout is `InferenceUnavailable`."""
+    try:
+        response = client.post(path, json=body)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise InferenceUnavailable(f"{path}: {exc!r}") from exc
+    return response.json()
+
+
+def token_counter(settings: Settings) -> Callable[[str], int]:
+    """Count tokens in this process, so chunking and assembly never call the service."""
+    if settings.model_backend == "fake":
+        return FakeEmbedder(settings.embed_dim).count_tokens
+    # Only the tokenizer is loaded, not the model; transformers comes with sentence-transformers.
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(settings.embed_model)
+    return lambda text: len(tokenizer(text, add_special_tokens=False)["input_ids"])
+
+
+class RemoteEmbedder:
+    """The embedder of the inference service at `INFERENCE_URL`."""
+
+    def __init__(self, client: httpx.Client, dim: int, count_tokens: Callable[[str], int]) -> None:
+        self.client = client
+        self.dim = dim
+        self.count_tokens = count_tokens
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        body = {"texts": texts, "kind": "document"}
+        return post_inference(self.client, "/embed", body)["vectors"]
+
+    def embed_query(self, text: str) -> list[float]:
+        body = {"texts": [text], "kind": "query"}
+        return post_inference(self.client, "/embed", body)["vectors"][0]
+
+
+def inference_client(url: str, timeout_ms: int) -> httpx.Client:
+    return httpx.Client(base_url=url, timeout=timeout_ms / 1000)
+
+
+def make_embedder(settings: Settings) -> Embedder:
+    """The inference service's embedder when `INFERENCE_URL` is set, else one in this process."""
+    if not settings.inference_url:
+        return local_embedder(settings)
+    client = inference_client(settings.inference_url, settings.inference_timeout_ms)
+    return RemoteEmbedder(client, settings.embed_dim, token_counter(settings))
 
 
 class FakeReranker:
@@ -104,10 +158,28 @@ class CrossEncoderReranker:
         return self.model.predict([(query, p) for p in passages]).tolist()
 
 
-def make_reranker(settings: Settings) -> Reranker:
+def local_reranker(settings: Settings) -> Reranker:
     if settings.model_backend == "fake":
         return FakeReranker()
     return CrossEncoderReranker(settings.rerank_model)
+
+
+class RemoteReranker:
+    """The reranker of the inference service at `INFERENCE_URL`."""
+
+    def __init__(self, client: httpx.Client) -> None:
+        self.client = client
+
+    def score(self, query: str, passages: list[str]) -> list[float]:
+        body = {"query": query, "passages": passages}
+        return post_inference(self.client, "/rerank", body)["scores"]
+
+
+def make_reranker(settings: Settings) -> Reranker:
+    """The inference service's reranker when `INFERENCE_URL` is set, else one in this process."""
+    if not settings.inference_url:
+        return local_reranker(settings)
+    return RemoteReranker(inference_client(settings.inference_url, settings.rerank_timeout_ms))
 
 
 def _rewrite(user: str) -> str:
