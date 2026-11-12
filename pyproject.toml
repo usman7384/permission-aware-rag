@@ -1,7 +1,7 @@
 [project]
-name = "rag-laptop"
+name = "permission-aware-rag"
 version = "0.1.0"
-description = "Laptop RAG service with permissions, hybrid search, caches and evaluation"
+description = "Permission-aware retrieval-augmented generation service with hybrid search, safe caching and measured evaluation"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi",

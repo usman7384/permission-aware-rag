@@ -4,7 +4,7 @@ Instructions for a coding agent building this repository. Read this file first, 
 
 ## What this project is
 
-A retrieval-augmented generation (RAG) service that runs on one laptop: an API service, an ingestion worker and an evaluation harness, backed by Qdrant, OpenSearch, Postgres and Redis. It has relationship-based permissions, hybrid search, three cache tiers, fallbacks for every external dependency, and measured evaluation.
+A retrieval-augmented generation (RAG) service that runs on a single machine: an API service, an ingestion worker and an evaluation harness, backed by Qdrant, OpenSearch, Postgres and Redis. It has relationship-based permissions, hybrid search, three cache tiers, fallbacks for every external dependency, and measured evaluation.
 
 The owner is building it to learn the system and to discuss it in interviews. Code clarity matters more than cleverness: the owner must be able to read and explain every function.
 

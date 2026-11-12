@@ -48,7 +48,7 @@ class RerankRequest(BaseModel):
 
 
 def create_app(settings: Settings, embedder: Embedder, reranker: Reranker) -> FastAPI:
-    app = FastAPI(title="rag-laptop inference")
+    app = FastAPI(title="permission-aware-rag inference")
 
     def embed_queries(texts: list[str]) -> list[list[float]]:
         return [embedder.embed_query(text) for text in texts]

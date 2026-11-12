@@ -34,7 +34,7 @@ TEST_SETTINGS = Settings(
     model_backend="fake",
     abstain_threshold=1,
     worker_block_ms=100,
-    # Store setup can take over 5 s on a busy laptop.
+    # Store setup can take over 5 s on a busy machine.
     store_timeout_s=30,
 )
 # The API reads Settings() from the environment.

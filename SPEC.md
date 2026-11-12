@@ -1,10 +1,10 @@
 # SPEC.md
 
-The specification for the laptop RAG system. Every choice an implementer would otherwise have to make is fixed here. Working rules are in `AGENTS.md`.
+The specification for the permission-aware RAG system. Every choice an implementer would otherwise have to make is fixed here. Working rules are in `AGENTS.md`.
 
 ## 1. Goal and success checks
 
-Build a RAG service on one laptop that answers questions over a folder of documents, enforces per-user permissions, and reports measured quality and latency.
+Build a RAG service on a single machine that answers questions over a folder of documents, enforces per-user permissions, and reports measured quality and latency.
 
 Phase 1 is done when all eight checks pass:
 
@@ -45,7 +45,7 @@ Store settings that matter:
 ## 3. Repository layout
 
 ```
-rag-laptop/
+permission-aware-rag/
 ├── AGENTS.md  SPEC.md  DECISIONS.md  README.md
 ├── Makefile
 ├── pyproject.toml
